@@ -96,9 +96,9 @@ export function Header() {
         {/* User Menu */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" className="relative h-9 w-9 rounded-full">
-              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary text-primary-foreground">
-                {user?.name?.charAt(0) || user?.email?.charAt(0) || 'U'}
+            <Button variant="ghost" className="relative h-9 w-9 rounded-full p-0">
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary text-sm font-medium text-primary-foreground">
+                {user?.name?.charAt(0).toUpperCase() || user?.email?.charAt(0).toUpperCase() || 'U'}
               </div>
             </Button>
           </DropdownMenuTrigger>
