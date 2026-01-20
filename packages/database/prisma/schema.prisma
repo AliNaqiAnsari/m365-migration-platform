@@ -1,0 +1,794 @@
+// ============================================================================
+// M365 Migration Platform - Prisma Schema
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// Organizations & Users
+// ============================================================================
+
+model Organization {
+  id               String   @id @default(uuid())
+  name             String
+  slug             String   @unique
+  plan             Plan     @default(FREE)
+  billingEmail     String?
+  stripeCustomerId String?
+  settings         Json     @default("{}")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Relations
+  users          User[]
+  tenants        Tenant[]
+  migrationJobs  MigrationJob[]
+  backupJobs     BackupJob[]
+  archives       Archive[]
+  subscriptions  Subscription[]
+  usageRecords   UsageRecord[]
+  invoices       Invoice[]
+  activityLogs   ActivityLog[]
+  webhooks       Webhook[]
+
+  @@map("organizations")
+}
+
+enum Plan {
+  FREE
+  STARTER
+  BUSINESS
+  ENTERPRISE
+}
+
+model User {
+  id             String       @id @default(uuid())
+  organizationId String
+  email          String
+  name           String?
+  passwordHash   String?
+  role           UserRole     @default(MEMBER)
+  authProvider   AuthProvider @default(LOCAL)
+  authProviderId String?
+  avatar         String?
+  mfaEnabled     Boolean      @default(false)
+  mfaSecret      String?
+  emailVerified  Boolean      @default(false)
+  lastLoginAt    DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  // Relations
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sessions       Session[]
+  migrationJobs  MigrationJob[] @relation("CreatedByUser")
+  backupJobs     BackupJob[]    @relation("CreatedByUser")
+  restoreJobs    RestoreJob[]   @relation("CreatedByUser")
+  activityLogs   ActivityLog[]
+
+  @@unique([organizationId, email])
+  @@index([email])
+  @@map("users")
+}
+
+enum UserRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum AuthProvider {
+  LOCAL
+  MICROSOFT
+  GOOGLE
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       String
+  token        String   @unique
+  refreshToken String   @unique
+  expiresAt    DateTime
+  userAgent    String?
+  ipAddress    String?
+  createdAt    DateTime @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+// ============================================================================
+// Connected Tenants (M365 / Google Workspace)
+// ============================================================================
+
+model Tenant {
+  id             String         @id @default(uuid())
+  organizationId String
+  platform       CloudPlatform
+  tenantId       String? // Azure AD tenant ID
+  tenantName     String
+  tenantDomain   String
+  connectionType ConnectionType
+  status         TenantStatus   @default(PENDING)
+
+  // Google Workspace specific (Coming Soon)
+  googleCustomerId String?
+  googleDomain     String?
+
+  // Encrypted tokens
+  accessTokenEncrypted  Bytes?
+  refreshTokenEncrypted Bytes?
+  tokenExpiresAt        DateTime?
+
+  // Inventory cache
+  userCount        Int      @default(0)
+  mailboxCount     Int      @default(0)
+  siteCount        Int      @default(0)
+  teamCount        Int      @default(0)
+  driveStorageUsed BigInt   @default(0)
+
+  lastSyncAt DateTime?
+  lastError  String?
+  metadata   Json      @default("{}")
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  // Relations
+  organization          Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sourceMigrations      MigrationJob[]   @relation("SourceTenant")
+  destinationMigrations MigrationJob[]   @relation("DestinationTenant")
+  backupJobs            BackupJob[]
+  restoreTargets        RestoreJob[]
+  archives              Archive[]
+
+  @@unique([organizationId, tenantId])
+  @@index([organizationId])
+  @@index([status])
+  @@map("tenants")
+}
+
+enum CloudPlatform {
+  MICROSOFT365
+  GOOGLE_WORKSPACE
+}
+
+enum ConnectionType {
+  SOURCE
+  DESTINATION
+}
+
+enum TenantStatus {
+  PENDING
+  CONNECTED
+  ERROR
+  DISCONNECTED
+}
+
+// ============================================================================
+// Migration Jobs & Tasks
+// ============================================================================
+
+model MigrationJob {
+  id                  String          @id @default(uuid())
+  organizationId      String
+  sourceTenantId      String
+  destinationTenantId String
+  createdById         String
+
+  name        String
+  description String?
+  jobType     MigrationJobType
+  workloads   Json // Array of workload strings
+  scope       Json // MigrationScope object
+  options     Json @default("{}") // MigrationOptions object
+
+  status   MigrationStatus @default(DRAFT)
+  progress Int             @default(0)
+
+  scheduledAt DateTime?
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  // Statistics
+  totalItems       Int    @default(0)
+  processedItems   Int    @default(0)
+  successfulItems  Int    @default(0)
+  failedItems      Int    @default(0)
+  skippedItems     Int    @default(0)
+  totalBytes       BigInt @default(0)
+  transferredBytes BigInt @default(0)
+
+  // Error tracking
+  errorCount Int     @default(0)
+  lastError  String?
+
+  // Payment
+  paymentStatus   PaymentStatus?
+  stripePaymentId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  organization      Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sourceTenant      Tenant          @relation("SourceTenant", fields: [sourceTenantId], references: [id])
+  destinationTenant Tenant          @relation("DestinationTenant", fields: [destinationTenantId], references: [id])
+  createdBy         User            @relation("CreatedByUser", fields: [createdById], references: [id])
+  tasks             MigrationTask[]
+  itemErrors        MigrationItemError[]
+  usageRecords      UsageRecord[]
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("migration_jobs")
+}
+
+enum MigrationJobType {
+  FULL
+  INCREMENTAL
+  SELECTIVE
+  CUTOVER
+  STAGED
+  PILOT
+}
+
+enum MigrationStatus {
+  DRAFT
+  PENDING
+  VALIDATING
+  READY
+  RUNNING
+  PAUSED
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+}
+
+model MigrationTask {
+  id             String @id @default(uuid())
+  jobId          String
+  organizationId String
+
+  taskType String // user, mailbox, calendar, site, team, etc.
+  workload String // exchange, sharepoint, onedrive, teams
+
+  sourceId      String
+  sourceName    String?
+  sourcePath    String?
+  destinationId String?
+  destinationPath String?
+
+  status   MigrationTaskStatus @default(PENDING)
+  progress Int                 @default(0)
+
+  totalItems     Int    @default(0)
+  processedItems Int    @default(0)
+  failedItems    Int    @default(0)
+  totalBytes     BigInt @default(0)
+  transferredBytes BigInt @default(0)
+
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  lastDeltaToken String?
+  lastSyncAt     DateTime?
+
+  errorMessage String?
+  errorDetails Json?
+  metadata     Json   @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  job        MigrationJob         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  itemErrors MigrationItemError[]
+
+  @@index([jobId])
+  @@index([status])
+  @@index([taskType])
+  @@map("migration_tasks")
+}
+
+enum MigrationTaskStatus {
+  PENDING
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  SKIPPED
+  CANCELLED
+}
+
+model MigrationItemError {
+  id        String   @id @default(uuid())
+  taskId    String
+  jobId     String
+
+  itemId       String
+  itemName     String?
+  itemType     String
+  errorCode    String
+  errorMessage String
+  errorDetails Json?
+  retryCount   Int      @default(0)
+  canRetry     Boolean  @default(true)
+  timestamp    DateTime @default(now())
+
+  // Relations
+  task MigrationTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  job  MigrationJob  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  @@index([jobId])
+  @@map("migration_item_errors")
+}
+
+// ============================================================================
+// Backup & Restore
+// ============================================================================
+
+model BackupJob {
+  id             String @id @default(uuid())
+  organizationId String
+  tenantId       String
+  createdById    String
+
+  name        String
+  description String?
+  backupType  BackupType
+  workloads   Json // Array of workload strings
+  scope       Json // BackupScope object
+
+  scheduleCron String?
+  nextRunAt    DateTime?
+
+  retentionDays Int         @default(30)
+  storageTier   StorageTier @default(HOT)
+
+  status        BackupJobStatus @default(SCHEDULED)
+  lastRunAt     DateTime?
+  lastRunStatus BackupJobStatus?
+
+  totalSnapshots   Int    @default(0)
+  totalStorageUsed BigInt @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tenant       Tenant           @relation(fields: [tenantId], references: [id])
+  createdBy    User             @relation("CreatedByUser", fields: [createdById], references: [id])
+  snapshots    BackupSnapshot[]
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([nextRunAt])
+  @@map("backup_jobs")
+}
+
+enum BackupType {
+  FULL
+  INCREMENTAL
+  DIFFERENTIAL
+  CONTINUOUS
+}
+
+enum BackupJobStatus {
+  SCHEDULED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum StorageTier {
+  HOT
+  COOL
+  COLD
+  ARCHIVE
+}
+
+model BackupSnapshot {
+  id             String @id @default(uuid())
+  organizationId String
+  backupJobId    String
+
+  snapshotType BackupType
+  status       SnapshotStatus @default(CREATING)
+
+  storagePath String
+  storageTier StorageTier @default(HOT)
+  sizeBytes   BigInt      @default(0)
+
+  totalItems    Int @default(0)
+  backedUpItems Int @default(0)
+
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+  expiresAt   DateTime
+
+  parentSnapshotId String?
+  deltaToken       String?
+  metadata         Json    @default("{}")
+
+  createdAt DateTime @default(now())
+
+  // Relations
+  backupJob   BackupJob    @relation(fields: [backupJobId], references: [id], onDelete: Cascade)
+  restoreJobs RestoreJob[]
+  items       BackupItem[]
+
+  @@index([backupJobId])
+  @@index([status])
+  @@index([expiresAt])
+  @@map("backup_snapshots")
+}
+
+enum SnapshotStatus {
+  CREATING
+  COMPLETED
+  FAILED
+  EXPIRED
+  DELETED
+}
+
+model BackupItem {
+  id          String @id @default(uuid())
+  snapshotId  String
+
+  itemType    String
+  itemId      String
+  itemName    String
+  itemPath    String
+  sizeBytes   BigInt
+  storagePath String
+  parentId    String?
+  metadata    Json   @default("{}")
+  createdAt   DateTime @default(now())
+
+  // Relations
+  snapshot BackupSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
+  @@index([snapshotId])
+  @@index([itemType])
+  @@map("backup_items")
+}
+
+model RestoreJob {
+  id             String @id @default(uuid())
+  organizationId String
+  snapshotId     String
+  targetTenantId String
+  createdById    String
+
+  restoreType        RestoreType
+  status             RestoreJobStatus @default(PENDING)
+  selectedItems      Json? // Array of item IDs for selective restore
+  restoreDestination RestoreDestination
+  alternatePath      String?
+
+  totalItems    Int @default(0)
+  restoredItems Int @default(0)
+  failedItems   Int @default(0)
+
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  snapshot     BackupSnapshot @relation(fields: [snapshotId], references: [id])
+  targetTenant Tenant         @relation(fields: [targetTenantId], references: [id])
+  createdBy    User           @relation("CreatedByUser", fields: [createdById], references: [id])
+
+  @@index([snapshotId])
+  @@index([status])
+  @@map("restore_jobs")
+}
+
+enum RestoreType {
+  FULL
+  SELECTIVE
+  GRANULAR
+}
+
+enum RestoreJobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum RestoreDestination {
+  ORIGINAL
+  ALTERNATE
+}
+
+// ============================================================================
+// Archives
+// ============================================================================
+
+model Archive {
+  id             String @id @default(uuid())
+  organizationId String
+  tenantId       String
+
+  name        String
+  description String?
+  policyId    String?
+
+  status       ArchiveStatus @default(ACTIVE)
+  storageTier  StorageTier   @default(ARCHIVE)
+  storagePath  String
+  sizeBytes    BigInt        @default(0)
+  itemCount    Int           @default(0)
+
+  retentionEndDate DateTime?
+  legalHold        Boolean   @default(false)
+  legalHoldReason  String?
+  immutable        Boolean   @default(false)
+  chainOfCustody   Json      @default("[]")
+
+  metadata  Json     @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tenant       Tenant          @relation(fields: [tenantId], references: [id])
+  policy       ArchivePolicy?  @relation(fields: [policyId], references: [id])
+
+  @@index([organizationId])
+  @@index([status])
+  @@map("archives")
+}
+
+enum ArchiveStatus {
+  ACTIVE
+  ON_HOLD
+  EXPIRED
+  DELETED
+}
+
+model ArchivePolicy {
+  id             String @id @default(uuid())
+  organizationId String
+
+  name        String
+  description String?
+
+  archiveAfterDays     Int
+  archiveBySize        BigInt?
+  archiveByType        Json? // Array of content types
+
+  storageTier          StorageTier @default(ARCHIVE)
+  retentionDays        Int
+  deleteAfterRetention Boolean     @default(false)
+
+  applyToWorkloads Json? // Array of workloads
+  applyToUsers     Json? // Array of user IDs
+  applyToSites     Json? // Array of site IDs
+
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  archives Archive[]
+
+  @@index([organizationId])
+  @@map("archive_policies")
+}
+
+// ============================================================================
+// Billing
+// ============================================================================
+
+model PricingPlan {
+  id              String      @id @default(uuid())
+  name            String
+  type            BillingType
+  pricePerUnit    Decimal     @db.Decimal(10, 2)
+  unitType        UnitType
+  stripePriceId   String?
+  stripeProductId String?
+  features        Json        @default("[]")
+  isActive        Boolean     @default(true)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  subscriptions Subscription[]
+
+  @@map("pricing_plans")
+}
+
+enum BillingType {
+  MIGRATION
+  BACKUP
+  ARCHIVE
+  STORAGE
+}
+
+enum UnitType {
+  USER
+  SITE
+  GB
+  FLAT
+}
+
+model Subscription {
+  id                   String             @id @default(uuid())
+  organizationId       String
+  planId               String
+  stripeSubscriptionId String?
+  stripeCustomerId     String?
+  status               SubscriptionStatus @default(ACTIVE)
+  currentPeriodStart   DateTime
+  currentPeriodEnd     DateTime
+  quantity             Int                @default(1)
+  cancelAtPeriodEnd    Boolean            @default(false)
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan         PricingPlan  @relation(fields: [planId], references: [id])
+
+  @@index([organizationId])
+  @@index([status])
+  @@map("subscriptions")
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELLED
+  PAST_DUE
+  TRIALING
+  PAUSED
+}
+
+model UsageRecord {
+  id             String      @id @default(uuid())
+  organizationId String
+  jobId          String?
+  usageType      BillingType
+  workload       String?
+  userCount      Int         @default(0)
+  siteCount      Int         @default(0)
+  bytesProcessed BigInt      @default(0)
+  unitPrice      Decimal     @db.Decimal(10, 2)
+  totalAmount    Decimal     @db.Decimal(10, 2)
+  billed         Boolean     @default(false)
+  billedAt       DateTime?
+  stripeUsageRecordId String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  // Relations
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  migrationJob MigrationJob? @relation(fields: [jobId], references: [id])
+
+  @@index([organizationId])
+  @@index([billed])
+  @@map("usage_records")
+}
+
+model Invoice {
+  id              String        @id @default(uuid())
+  organizationId  String
+  stripeInvoiceId String?
+  invoiceNumber   String        @unique
+  amount          Decimal       @db.Decimal(10, 2)
+  currency        String        @default("USD")
+  status          InvoiceStatus @default(DRAFT)
+  periodStart     DateTime
+  periodEnd       DateTime
+  lineItems       Json          @default("[]")
+  paidAt          DateTime?
+  dueDate         DateTime
+  pdfUrl          String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([status])
+  @@map("invoices")
+}
+
+enum InvoiceStatus {
+  DRAFT
+  OPEN
+  PAID
+  VOID
+  UNCOLLECTIBLE
+}
+
+// ============================================================================
+// Activity Logs & Webhooks
+// ============================================================================
+
+model ActivityLog {
+  id             String   @id @default(uuid())
+  organizationId String
+  userId         String?
+  timestamp      DateTime @default(now())
+  level          LogLevel
+  category       LogCategory
+  jobId          String?
+  taskId         String?
+  message        String
+  details        Json     @default("{}")
+  sourceIp       String?
+  userAgent      String?
+
+  // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id])
+
+  @@index([organizationId, timestamp])
+  @@index([level])
+  @@index([category])
+  @@index([jobId])
+  @@map("activity_logs")
+}
+
+enum LogLevel {
+  DEBUG
+  INFO
+  WARNING
+  ERROR
+}
+
+enum LogCategory {
+  MIGRATION
+  BACKUP
+  AUTH
+  SYSTEM
+  BILLING
+}
+
+model Webhook {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  url            String
+  secret         String?
+  events         Json     @default("[]") // Array of event types
+  isActive       Boolean  @default(true)
+  lastTriggeredAt DateTime?
+  failureCount   Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@map("webhooks")
+}
