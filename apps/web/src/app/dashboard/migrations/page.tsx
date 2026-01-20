@@ -11,9 +11,12 @@ import { cn } from '@/lib/utils';
 
 interface Migration {
   id: string;
+  uniqueId: string;
   name: string;
   source: string;
+  sourcePlatform: 'microsoft' | 'google';
   destination: string;
+  destinationPlatform: 'microsoft' | 'google';
   status: 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
   progress: number;
   workloads: string[];
@@ -29,9 +32,12 @@ interface Migration {
 const mockMigrations: Migration[] = [
   {
     id: '1',
+    uniqueId: 'mig-lx8k2n4-a7bc9d3',
     name: 'Full Migration - Contoso to Fabrikam',
     source: 'Contoso Corporation',
+    sourcePlatform: 'microsoft',
     destination: 'Fabrikam Inc',
+    destinationPlatform: 'microsoft',
     status: 'running',
     progress: 67,
     workloads: ['Exchange', 'OneDrive', 'SharePoint', 'Teams'],
@@ -45,9 +51,12 @@ const mockMigrations: Migration[] = [
   },
   {
     id: '2',
+    uniqueId: 'mig-mx9l3o5-b8cd0e4',
     name: 'Exchange Only - Northwind',
     source: 'Northwind Traders',
+    sourcePlatform: 'microsoft',
     destination: 'Adventure Works',
+    destinationPlatform: 'microsoft',
     status: 'running',
     progress: 23,
     workloads: ['Exchange'],
@@ -61,12 +70,15 @@ const mockMigrations: Migration[] = [
   },
   {
     id: '3',
-    name: 'SharePoint Sites Migration',
-    source: 'Tailspin Toys',
-    destination: 'Wide World Importers',
+    uniqueId: 'mig-nx0m4p6-c9de1f5',
+    name: 'Google to Microsoft - Acme Inc',
+    source: 'Acme Inc',
+    sourcePlatform: 'google',
+    destination: 'Contoso Corporation',
+    destinationPlatform: 'microsoft',
     status: 'running',
     progress: 89,
-    workloads: ['SharePoint'],
+    workloads: ['Gmail → Exchange', 'Drive → OneDrive'],
     totalItems: 8500,
     processedItems: 7565,
     totalBytes: 214748364800, // 200 GB
@@ -77,9 +89,12 @@ const mockMigrations: Migration[] = [
   },
   {
     id: '4',
+    uniqueId: 'mig-ox1n5q7-d0ef2g6',
     name: 'Teams Migration - Phase 1',
     source: 'Contoso Corporation',
+    sourcePlatform: 'microsoft',
     destination: 'Fabrikam Inc',
+    destinationPlatform: 'microsoft',
     status: 'completed',
     progress: 100,
     workloads: ['Teams'],
@@ -93,9 +108,12 @@ const mockMigrations: Migration[] = [
   },
   {
     id: '5',
+    uniqueId: 'mig-px2o6r8-e1fg3h7',
     name: 'OneDrive Pilot Migration',
     source: 'Northwind Traders',
+    sourcePlatform: 'microsoft',
     destination: 'Adventure Works',
+    destinationPlatform: 'microsoft',
     status: 'paused',
     progress: 45,
     workloads: ['OneDrive'],
@@ -109,12 +127,15 @@ const mockMigrations: Migration[] = [
   },
   {
     id: '6',
-    name: 'Failed Exchange Migration',
-    source: 'Adventure Works',
-    destination: 'Wide World Importers',
+    uniqueId: 'mig-qx3p7s9-f2gh4i8',
+    name: 'Microsoft to Google - TechStart',
+    source: 'TechStart Solutions',
+    sourcePlatform: 'microsoft',
+    destination: 'TechStart Google',
+    destinationPlatform: 'google',
     status: 'failed',
     progress: 12,
-    workloads: ['Exchange'],
+    workloads: ['Exchange → Gmail', 'OneDrive → Drive'],
     totalItems: 30000,
     processedItems: 3600,
     totalBytes: 85899345920, // 80 GB
@@ -294,6 +315,7 @@ export default function MigrationsPage() {
 function MigrationCard({ migration }: { migration: Migration }) {
   const status = statusConfig[migration.status];
   const StatusIcon = status.icon;
+  const isCrossPlatform = migration.sourcePlatform !== migration.destinationPlatform;
 
   return (
     <motion.div
@@ -316,21 +338,45 @@ function MigrationCard({ migration }: { migration: Migration }) {
                     <StatusIcon className="mr-1 h-3 w-3" />
                     {migration.status}
                   </Badge>
+                  {isCrossPlatform && (
+                    <Badge variant="outline" className="text-xs border-purple-300 bg-purple-50 text-purple-700">
+                      Cross-Platform
+                    </Badge>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <span>{migration.source}</span>
+                  <div className="flex items-center gap-1.5">
+                    {migration.sourcePlatform === 'microsoft' ? (
+                      <Icons.microsoft className="h-4 w-4" />
+                    ) : (
+                      <Icons.googleWorkspace className="h-4 w-4" />
+                    )}
+                    <span>{migration.source}</span>
+                  </div>
                   <Icons.chevronRight className="h-4 w-4" />
-                  <span>{migration.destination}</span>
+                  <div className="flex items-center gap-1.5">
+                    {migration.destinationPlatform === 'microsoft' ? (
+                      <Icons.microsoft className="h-4 w-4" />
+                    ) : (
+                      <Icons.googleWorkspace className="h-4 w-4" />
+                    )}
+                    <span>{migration.destination}</span>
+                  </div>
                 </div>
 
-                {/* Workloads */}
-                <div className="flex flex-wrap gap-2">
-                  {migration.workloads.map((workload) => (
-                    <Badge key={workload} variant="outline" className="text-xs">
-                      {workload}
-                    </Badge>
-                  ))}
+                {/* ID and Workloads */}
+                <div className="flex items-center gap-3">
+                  <code className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                    {migration.uniqueId}
+                  </code>
+                  <div className="flex flex-wrap gap-2">
+                    {migration.workloads.map((workload) => (
+                      <Badge key={workload} variant="outline" className="text-xs">
+                        {workload}
+                      </Badge>
+                    ))}
+                  </div>
                 </div>
               </div>
 

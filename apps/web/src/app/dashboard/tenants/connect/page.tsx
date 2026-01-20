@@ -9,9 +9,11 @@ import { Badge } from '@/components/ui/badge';
 import { Icons } from '@/components/icons';
 import { cn } from '@/lib/utils';
 
-type Step = 'select-type' | 'consent' | 'connecting' | 'success';
+type Platform = 'microsoft' | 'google';
+type TenantType = 'source' | 'destination';
+type Step = 'select-platform' | 'select-type' | 'consent' | 'connecting' | 'success';
 
-const permissions = [
+const microsoftPermissions = [
   { name: 'User.Read.All', description: 'Read all user profiles' },
   { name: 'Mail.ReadWrite', description: 'Read and write mail in all mailboxes' },
   { name: 'Calendars.ReadWrite', description: 'Read and write calendars' },
@@ -21,6 +23,19 @@ const permissions = [
   { name: 'Team.ReadBasic.All', description: 'Read Teams information' },
   { name: 'Channel.ReadBasic.All', description: 'Read channel information' },
   { name: 'Group.ReadWrite.All', description: 'Read and write all groups' },
+];
+
+const googlePermissions = [
+  { name: 'gmail.readonly', description: 'Read all Gmail messages and settings' },
+  { name: 'gmail.modify', description: 'Read, compose, send, and modify emails' },
+  { name: 'drive.readonly', description: 'Read all files in Google Drive' },
+  { name: 'drive.file', description: 'Create and modify files in Google Drive' },
+  { name: 'calendar.readonly', description: 'Read calendar events' },
+  { name: 'calendar.events', description: 'Create and modify calendar events' },
+  { name: 'contacts.readonly', description: 'Read contacts' },
+  { name: 'contacts', description: 'Read and modify contacts' },
+  { name: 'admin.directory.user.readonly', description: 'Read user directory' },
+  { name: 'admin.directory.group.readonly', description: 'Read group directory' },
 ];
 
 const containerVariants = {
@@ -45,11 +60,17 @@ const itemVariants = {
 };
 
 export default function ConnectTenantPage() {
-  const [step, setStep] = useState<Step>('select-type');
-  const [tenantType, setTenantType] = useState<'source' | 'destination' | null>(null);
+  const [step, setStep] = useState<Step>('select-platform');
+  const [platform, setPlatform] = useState<Platform | null>(null);
+  const [tenantType, setTenantType] = useState<TenantType | null>(null);
   const router = useRouter();
 
-  const handleTypeSelect = (type: 'source' | 'destination') => {
+  const handlePlatformSelect = (selectedPlatform: Platform) => {
+    setPlatform(selectedPlatform);
+    setStep('select-type');
+  };
+
+  const handleTypeSelect = (type: TenantType) => {
     setTenantType(type);
     setStep('consent');
   };
@@ -62,36 +83,52 @@ export default function ConnectTenantPage() {
     }, 3000);
   };
 
+  const handleBack = () => {
+    if (step === 'select-type') {
+      setStep('select-platform');
+      setPlatform(null);
+    } else if (step === 'consent') {
+      setStep('select-type');
+      setTenantType(null);
+    }
+  };
+
+  const getSteps = () => {
+    return [
+      { id: 'select-platform', label: 'Platform' },
+      { id: 'select-type', label: 'Type' },
+      { id: 'consent', label: 'Grant Access' },
+      { id: 'connecting', label: 'Connecting' },
+      { id: 'success', label: 'Complete' },
+    ];
+  };
+
+  const permissions = platform === 'google' ? googlePermissions : microsoftPermissions;
+
   return (
     <motion.div
       variants={containerVariants}
       initial="hidden"
       animate="visible"
-      className="mx-auto max-w-2xl space-y-8"
+      className="mx-auto max-w-3xl space-y-8"
     >
       {/* Page Header */}
       <motion.div variants={itemVariants} className="text-center">
-        <h1 className="text-3xl font-bold tracking-tight">Connect Microsoft 365 Tenant</h1>
+        <h1 className="text-3xl font-bold tracking-tight">Connect Tenant</h1>
         <p className="mt-2 text-muted-foreground">
-          Connect your tenant to start migrating data
+          Connect your cloud tenant to start migrating data
         </p>
       </motion.div>
 
       {/* Progress Steps */}
       <motion.div variants={itemVariants} className="flex justify-center">
-        <div className="flex items-center gap-4">
-          {[
-            { id: 'select-type', label: 'Select Type' },
-            { id: 'consent', label: 'Grant Access' },
-            { id: 'connecting', label: 'Connecting' },
-            { id: 'success', label: 'Complete' },
-          ].map((s, index) => {
+        <div className="flex items-center gap-2 sm:gap-4">
+          {getSteps().map((s, index) => {
+            const stepOrder = getSteps().map(st => st.id);
             const isActive = s.id === step;
-            const isPast =
-              ['select-type', 'consent', 'connecting', 'success'].indexOf(step) >
-              ['select-type', 'consent', 'connecting', 'success'].indexOf(s.id);
+            const isPast = stepOrder.indexOf(step) > stepOrder.indexOf(s.id);
             return (
-              <div key={s.id} className="flex items-center gap-4">
+              <div key={s.id} className="flex items-center gap-2 sm:gap-4">
                 <div className="flex items-center gap-2">
                   <div
                     className={cn(
@@ -105,7 +142,7 @@ export default function ConnectTenantPage() {
                   </div>
                   <span
                     className={cn(
-                      'text-sm font-medium',
+                      'hidden text-sm font-medium sm:block',
                       isActive && 'text-foreground',
                       !isActive && 'text-muted-foreground',
                     )}
@@ -113,10 +150,10 @@ export default function ConnectTenantPage() {
                     {s.label}
                   </span>
                 </div>
-                {index < 3 && (
+                {index < getSteps().length - 1 && (
                   <div
                     className={cn(
-                      'h-px w-12',
+                      'h-px w-6 sm:w-12',
                       isPast ? 'bg-green-500' : 'bg-muted',
                     )}
                   />
@@ -129,9 +166,9 @@ export default function ConnectTenantPage() {
 
       {/* Content */}
       <AnimatePresence mode="wait">
-        {step === 'select-type' && (
+        {step === 'select-platform' && (
           <motion.div
-            key="select-type"
+            key="select-platform"
             initial={{ opacity: 0, x: 20 }}
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: -20 }}
@@ -140,32 +177,36 @@ export default function ConnectTenantPage() {
             <Card
               className={cn(
                 'cursor-pointer transition-all hover:border-primary hover:shadow-md',
-                tenantType === 'source' && 'border-primary ring-2 ring-primary/20',
+                platform === 'microsoft' && 'border-primary ring-2 ring-primary/20',
               )}
-              onClick={() => handleTypeSelect('source')}
+              onClick={() => handlePlatformSelect('microsoft')}
             >
               <CardHeader className="text-center">
-                <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-blue-100">
-                  <Icons.upload className="h-8 w-8 text-blue-600" />
+                <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-blue-600">
+                  <Icons.microsoft className="h-10 w-10" />
                 </div>
-                <CardTitle>Source Tenant</CardTitle>
+                <CardTitle>Microsoft 365</CardTitle>
                 <CardDescription>
-                  The tenant you want to migrate data FROM
+                  Exchange, SharePoint, OneDrive, Teams
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <ul className="space-y-2 text-sm text-muted-foreground">
                   <li className="flex items-center gap-2">
-                    <Icons.check className="h-4 w-4 text-green-500" />
-                    Read access to all workloads
+                    <Icons.mail className="h-4 w-4 text-blue-500" />
+                    Exchange Online mailboxes
                   </li>
                   <li className="flex items-center gap-2">
-                    <Icons.check className="h-4 w-4 text-green-500" />
-                    User and group enumeration
+                    <Icons.database className="h-4 w-4 text-blue-500" />
+                    SharePoint sites & lists
                   </li>
                   <li className="flex items-center gap-2">
-                    <Icons.check className="h-4 w-4 text-green-500" />
-                    Delta sync capabilities
+                    <Icons.drive className="h-4 w-4 text-blue-500" />
+                    OneDrive for Business
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <Icons.teams className="h-4 w-4 text-blue-500" />
+                    Microsoft Teams
                   </li>
                 </ul>
               </CardContent>
@@ -174,36 +215,138 @@ export default function ConnectTenantPage() {
             <Card
               className={cn(
                 'cursor-pointer transition-all hover:border-primary hover:shadow-md',
-                tenantType === 'destination' && 'border-primary ring-2 ring-primary/20',
+                platform === 'google' && 'border-primary ring-2 ring-primary/20',
               )}
-              onClick={() => handleTypeSelect('destination')}
+              onClick={() => handlePlatformSelect('google')}
             >
               <CardHeader className="text-center">
-                <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-green-100">
-                  <Icons.download className="h-8 w-8 text-green-600" />
+                <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-red-500 via-yellow-500 to-green-500">
+                  <Icons.googleWorkspace className="h-10 w-10" />
                 </div>
-                <CardTitle>Destination Tenant</CardTitle>
+                <CardTitle>Google Workspace</CardTitle>
                 <CardDescription>
-                  The tenant you want to migrate data TO
+                  Gmail, Drive, Calendar, Contacts
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <ul className="space-y-2 text-sm text-muted-foreground">
                   <li className="flex items-center gap-2">
-                    <Icons.check className="h-4 w-4 text-green-500" />
-                    Write access to all workloads
+                    <Icons.gmail className="h-4 w-4" />
+                    Gmail mailboxes
                   </li>
                   <li className="flex items-center gap-2">
-                    <Icons.check className="h-4 w-4 text-green-500" />
-                    User and group creation
+                    <Icons.googleDrive className="h-4 w-4" />
+                    Google Drive files
                   </li>
                   <li className="flex items-center gap-2">
-                    <Icons.check className="h-4 w-4 text-green-500" />
-                    Permission mapping
+                    <Icons.googleCalendar className="h-4 w-4" />
+                    Google Calendar events
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <Icons.googleContacts className="h-4 w-4" />
+                    Google Contacts
                   </li>
                 </ul>
               </CardContent>
             </Card>
+          </motion.div>
+        )}
+
+        {step === 'select-type' && (
+          <motion.div
+            key="select-type"
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -20 }}
+            className="space-y-4"
+          >
+            <div className="flex items-center justify-center gap-2 mb-6">
+              {platform === 'microsoft' ? (
+                <Icons.microsoft className="h-6 w-6" />
+              ) : (
+                <Icons.googleWorkspace className="h-6 w-6" />
+              )}
+              <span className="font-medium">
+                {platform === 'microsoft' ? 'Microsoft 365' : 'Google Workspace'}
+              </span>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <Card
+                className={cn(
+                  'cursor-pointer transition-all hover:border-primary hover:shadow-md',
+                  tenantType === 'source' && 'border-primary ring-2 ring-primary/20',
+                )}
+                onClick={() => handleTypeSelect('source')}
+              >
+                <CardHeader className="text-center">
+                  <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-blue-100">
+                    <Icons.upload className="h-8 w-8 text-blue-600" />
+                  </div>
+                  <CardTitle>Source Tenant</CardTitle>
+                  <CardDescription>
+                    The tenant you want to migrate data FROM
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <ul className="space-y-2 text-sm text-muted-foreground">
+                    <li className="flex items-center gap-2">
+                      <Icons.check className="h-4 w-4 text-green-500" />
+                      Read access to all workloads
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <Icons.check className="h-4 w-4 text-green-500" />
+                      User and group enumeration
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <Icons.check className="h-4 w-4 text-green-500" />
+                      Delta sync capabilities
+                    </li>
+                  </ul>
+                </CardContent>
+              </Card>
+
+              <Card
+                className={cn(
+                  'cursor-pointer transition-all hover:border-primary hover:shadow-md',
+                  tenantType === 'destination' && 'border-primary ring-2 ring-primary/20',
+                )}
+                onClick={() => handleTypeSelect('destination')}
+              >
+                <CardHeader className="text-center">
+                  <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-green-100">
+                    <Icons.download className="h-8 w-8 text-green-600" />
+                  </div>
+                  <CardTitle>Destination Tenant</CardTitle>
+                  <CardDescription>
+                    The tenant you want to migrate data TO
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <ul className="space-y-2 text-sm text-muted-foreground">
+                    <li className="flex items-center gap-2">
+                      <Icons.check className="h-4 w-4 text-green-500" />
+                      Write access to all workloads
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <Icons.check className="h-4 w-4 text-green-500" />
+                      User and group creation
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <Icons.check className="h-4 w-4 text-green-500" />
+                      Permission mapping
+                    </li>
+                  </ul>
+                </CardContent>
+              </Card>
+            </div>
+
+            <div className="flex justify-center pt-4">
+              <Button variant="outline" onClick={handleBack}>
+                <Icons.chevronRight className="mr-2 h-4 w-4 rotate-180" />
+                Back to Platform Selection
+              </Button>
+            </div>
           </motion.div>
         )}
 
@@ -217,14 +360,22 @@ export default function ConnectTenantPage() {
             <Card>
               <CardHeader>
                 <div className="flex items-center gap-4">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10">
-                    <Icons.microsoft className="h-6 w-6" />
+                  <div className={cn(
+                    'flex h-12 w-12 items-center justify-center rounded-lg',
+                    platform === 'microsoft' ? 'bg-blue-100' : 'bg-red-100'
+                  )}>
+                    {platform === 'microsoft' ? (
+                      <Icons.microsoft className="h-6 w-6" />
+                    ) : (
+                      <Icons.googleWorkspace className="h-6 w-6" />
+                    )}
                   </div>
                   <div>
                     <CardTitle>Grant Application Access</CardTitle>
                     <CardDescription>
                       The following permissions will be requested from your{' '}
-                      {tenantType === 'source' ? 'source' : 'destination'} tenant
+                      {tenantType === 'source' ? 'source' : 'destination'}{' '}
+                      {platform === 'microsoft' ? 'Microsoft 365' : 'Google Workspace'} tenant
                     </CardDescription>
                   </div>
                 </div>
@@ -242,33 +393,63 @@ export default function ConnectTenantPage() {
                           {perm.description}
                         </p>
                       </div>
-                      <Badge variant="secondary">Application</Badge>
+                      <Badge variant="secondary">
+                        {platform === 'microsoft' ? 'Application' : 'OAuth'}
+                      </Badge>
                     </div>
                   ))}
                 </div>
 
-                <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-4 dark:border-yellow-900 dark:bg-yellow-950">
+                <div className={cn(
+                  'rounded-lg border p-4',
+                  platform === 'microsoft'
+                    ? 'border-yellow-200 bg-yellow-50 dark:border-yellow-900 dark:bg-yellow-950'
+                    : 'border-blue-200 bg-blue-50 dark:border-blue-900 dark:bg-blue-950'
+                )}>
                   <div className="flex items-start gap-3">
-                    <Icons.alert className="mt-0.5 h-5 w-5 text-yellow-600" />
+                    <Icons.alert className={cn(
+                      'mt-0.5 h-5 w-5',
+                      platform === 'microsoft' ? 'text-yellow-600' : 'text-blue-600'
+                    )} />
                     <div>
-                      <p className="font-medium text-yellow-800 dark:text-yellow-200">
-                        Admin Consent Required
+                      <p className={cn(
+                        'font-medium',
+                        platform === 'microsoft'
+                          ? 'text-yellow-800 dark:text-yellow-200'
+                          : 'text-blue-800 dark:text-blue-200'
+                      )}>
+                        {platform === 'microsoft' ? 'Admin Consent Required' : 'Super Admin Required'}
                       </p>
-                      <p className="text-sm text-yellow-700 dark:text-yellow-300">
-                        A Global Administrator of the tenant must approve these
-                        permissions. You will be redirected to Microsoft's consent page.
+                      <p className={cn(
+                        'text-sm',
+                        platform === 'microsoft'
+                          ? 'text-yellow-700 dark:text-yellow-300'
+                          : 'text-blue-700 dark:text-blue-300'
+                      )}>
+                        {platform === 'microsoft'
+                          ? 'A Global Administrator of the tenant must approve these permissions. You will be redirected to Microsoft\'s consent page.'
+                          : 'A Super Admin of the Google Workspace domain must approve these permissions. You will be redirected to Google\'s consent page.'}
                       </p>
                     </div>
                   </div>
                 </div>
 
                 <div className="flex gap-4">
-                  <Button variant="outline" onClick={() => setStep('select-type')}>
+                  <Button variant="outline" onClick={handleBack}>
                     Back
                   </Button>
                   <Button className="flex-1" onClick={handleConnect}>
-                    <Icons.microsoft className="mr-2 h-4 w-4" />
-                    Connect with Microsoft
+                    {platform === 'microsoft' ? (
+                      <>
+                        <Icons.microsoft className="mr-2 h-4 w-4" />
+                        Connect with Microsoft
+                      </>
+                    ) : (
+                      <>
+                        <Icons.google className="mr-2 h-4 w-4" />
+                        Connect with Google
+                      </>
+                    )}
                   </Button>
                 </div>
               </CardContent>
@@ -293,7 +474,9 @@ export default function ConnectTenantPage() {
                 >
                   <Icons.spinner className="h-12 w-12 text-primary" />
                 </motion.div>
-                <h3 className="text-xl font-semibold">Connecting to Microsoft 365</h3>
+                <h3 className="text-xl font-semibold">
+                  Connecting to {platform === 'microsoft' ? 'Microsoft 365' : 'Google Workspace'}
+                </h3>
                 <p className="mt-2 text-muted-foreground">
                   Please complete the authentication in the popup window...
                 </p>
@@ -341,14 +524,27 @@ export default function ConnectTenantPage() {
 
                 <div className="mx-auto mt-6 max-w-sm rounded-lg border p-4">
                   <div className="flex items-center gap-3">
-                    <Icons.microsoft className="h-8 w-8" />
+                    {platform === 'microsoft' ? (
+                      <Icons.microsoft className="h-8 w-8" />
+                    ) : (
+                      <Icons.googleWorkspace className="h-8 w-8" />
+                    )}
                     <div className="text-left">
-                      <p className="font-medium">Contoso Corporation</p>
+                      <p className="font-medium">
+                        {platform === 'microsoft' ? 'Contoso Corporation' : 'Acme Inc'}
+                      </p>
                       <p className="text-sm text-muted-foreground">
-                        contoso.onmicrosoft.com
+                        {platform === 'microsoft' ? 'contoso.onmicrosoft.com' : 'acme.com'}
                       </p>
                     </div>
-                    <Badge className="ml-auto capitalize">{tenantType}</Badge>
+                    <div className="ml-auto flex items-center gap-2">
+                      <Badge variant="outline" className={cn(
+                        platform === 'microsoft' ? 'bg-blue-50 text-blue-700' : 'bg-red-50 text-red-700'
+                      )}>
+                        {platform === 'microsoft' ? 'M365' : 'Google'}
+                      </Badge>
+                      <Badge className="capitalize">{tenantType}</Badge>
+                    </div>
                   </div>
                 </div>
 

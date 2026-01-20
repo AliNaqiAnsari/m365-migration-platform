@@ -13,6 +13,7 @@ interface Tenant {
   id: string;
   name: string;
   domain: string;
+  platform: 'microsoft' | 'google';
   type: 'source' | 'destination';
   status: 'connected' | 'error' | 'syncing';
   userCount: number;
@@ -28,6 +29,7 @@ const mockTenants: Tenant[] = [
     id: '1',
     name: 'Contoso Corporation',
     domain: 'contoso.onmicrosoft.com',
+    platform: 'microsoft',
     type: 'source',
     status: 'connected',
     userCount: 250,
@@ -41,6 +43,7 @@ const mockTenants: Tenant[] = [
     id: '2',
     name: 'Fabrikam Inc',
     domain: 'fabrikam.onmicrosoft.com',
+    platform: 'microsoft',
     type: 'destination',
     status: 'connected',
     userCount: 180,
@@ -52,8 +55,37 @@ const mockTenants: Tenant[] = [
   },
   {
     id: '3',
+    name: 'Acme Inc',
+    domain: 'acme.com',
+    platform: 'google',
+    type: 'source',
+    status: 'connected',
+    userCount: 320,
+    mailboxCount: 318,
+    siteCount: 0,
+    teamCount: 45,
+    lastSync: '2 minutes ago',
+    connectedAt: '2024-02-01',
+  },
+  {
+    id: '4',
+    name: 'TechStart Solutions',
+    domain: 'techstart.io',
+    platform: 'google',
+    type: 'destination',
+    status: 'syncing',
+    userCount: 85,
+    mailboxCount: 85,
+    siteCount: 0,
+    teamCount: 12,
+    lastSync: 'Syncing...',
+    connectedAt: '2024-02-05',
+  },
+  {
+    id: '5',
     name: 'Northwind Traders',
     domain: 'northwind.onmicrosoft.com',
+    platform: 'microsoft',
     type: 'source',
     status: 'syncing',
     userCount: 450,
@@ -64,9 +96,10 @@ const mockTenants: Tenant[] = [
     connectedAt: '2024-02-01',
   },
   {
-    id: '4',
+    id: '6',
     name: 'Adventure Works',
     domain: 'adventureworks.onmicrosoft.com',
+    platform: 'microsoft',
     type: 'destination',
     status: 'error',
     userCount: 0,
@@ -99,14 +132,21 @@ const itemVariants = {
   },
 };
 
+type FilterType = 'all' | 'source' | 'destination';
+type PlatformFilter = 'all' | 'microsoft' | 'google';
+
 export default function TenantsPage() {
-  const [filter, setFilter] = useState<'all' | 'source' | 'destination'>('all');
+  const [filter, setFilter] = useState<FilterType>('all');
+  const [platformFilter, setPlatformFilter] = useState<PlatformFilter>('all');
 
   const filteredTenants = mockTenants.filter((tenant) => {
-    if (filter === 'all') return true;
-    return tenant.type === filter;
+    const typeMatch = filter === 'all' || tenant.type === filter;
+    const platformMatch = platformFilter === 'all' || tenant.platform === platformFilter;
+    return typeMatch && platformMatch;
   });
 
+  const microsoftTenants = mockTenants.filter((t) => t.platform === 'microsoft');
+  const googleTenants = mockTenants.filter((t) => t.platform === 'google');
   const sourceTenants = mockTenants.filter((t) => t.type === 'source');
   const destinationTenants = mockTenants.filter((t) => t.type === 'destination');
 
@@ -122,7 +162,7 @@ export default function TenantsPage() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Tenants</h1>
           <p className="text-muted-foreground">
-            Manage your connected Microsoft 365 tenants
+            Manage your connected Microsoft 365 and Google Workspace tenants
           </p>
         </div>
         <Link href="/dashboard/tenants/connect">
@@ -134,7 +174,7 @@ export default function TenantsPage() {
       </motion.div>
 
       {/* Stats Cards */}
-      <motion.div variants={itemVariants} className="grid gap-4 md:grid-cols-3">
+      <motion.div variants={itemVariants} className="grid gap-4 md:grid-cols-4">
         <Card>
           <CardHeader className="pb-2">
             <CardDescription>Total Tenants</CardDescription>
@@ -148,52 +188,86 @@ export default function TenantsPage() {
         </Card>
         <Card>
           <CardHeader className="pb-2">
+            <CardDescription>Microsoft 365</CardDescription>
+            <CardTitle className="flex items-center gap-2 text-3xl">
+              <Icons.microsoft className="h-6 w-6" />
+              {microsoftTenants.length}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">
+              {microsoftTenants.reduce((sum, t) => sum + t.userCount, 0).toLocaleString()} users
+            </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>Google Workspace</CardDescription>
+            <CardTitle className="flex items-center gap-2 text-3xl">
+              <Icons.googleWorkspace className="h-6 w-6" />
+              {googleTenants.length}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">
+              {googleTenants.reduce((sum, t) => sum + t.userCount, 0).toLocaleString()} users
+            </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
             <CardDescription>Total Users</CardDescription>
             <CardTitle className="text-3xl">
               {mockTenants.reduce((sum, t) => sum + t.userCount, 0).toLocaleString()}
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-sm text-muted-foreground">Across all tenants</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Total Sites</CardDescription>
-            <CardTitle className="text-3xl">
-              {mockTenants.reduce((sum, t) => sum + t.siteCount, 0).toLocaleString()}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">SharePoint sites</p>
+            <p className="text-sm text-muted-foreground">Across all platforms</p>
           </CardContent>
         </Card>
       </motion.div>
 
       {/* Filter Tabs */}
-      <motion.div variants={itemVariants} className="flex gap-2">
-        {(['all', 'source', 'destination'] as const).map((type) => (
-          <Button
-            key={type}
-            variant={filter === type ? 'default' : 'outline'}
-            size="sm"
-            onClick={() => setFilter(type)}
-            className="capitalize"
-          >
-            {type === 'all' ? 'All Tenants' : `${type} Tenants`}
-            <Badge
-              variant="secondary"
-              className={cn(
-                'ml-2',
-                filter === type && 'bg-primary-foreground/20 text-primary-foreground',
-              )}
+      <motion.div variants={itemVariants} className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex gap-2">
+          {(['all', 'source', 'destination'] as const).map((type) => (
+            <Button
+              key={type}
+              variant={filter === type ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setFilter(type)}
+              className="capitalize"
             >
-              {type === 'all'
-                ? mockTenants.length
-                : mockTenants.filter((t) => t.type === type).length}
-            </Badge>
-          </Button>
-        ))}
+              {type === 'all' ? 'All Types' : `${type}`}
+              <Badge
+                variant="secondary"
+                className={cn(
+                  'ml-2',
+                  filter === type && 'bg-primary-foreground/20 text-primary-foreground',
+                )}
+              >
+                {type === 'all'
+                  ? mockTenants.length
+                  : mockTenants.filter((t) => t.type === type).length}
+              </Badge>
+            </Button>
+          ))}
+        </div>
+        <div className="flex gap-2">
+          {(['all', 'microsoft', 'google'] as const).map((platform) => (
+            <Button
+              key={platform}
+              variant={platformFilter === platform ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={() => setPlatformFilter(platform)}
+              className="gap-2"
+            >
+              {platform === 'microsoft' && <Icons.microsoft className="h-4 w-4" />}
+              {platform === 'google' && <Icons.googleWorkspace className="h-4 w-4" />}
+              {platform === 'all' ? 'All Platforms' : platform === 'microsoft' ? 'Microsoft 365' : 'Google'}
+            </Button>
+          ))}
+        </div>
       </motion.div>
 
       {/* Tenant Grid */}
@@ -204,6 +278,26 @@ export default function TenantsPage() {
           ))}
         </AnimatePresence>
       </motion.div>
+
+      {/* Empty State */}
+      {filteredTenants.length === 0 && (
+        <motion.div
+          variants={itemVariants}
+          className="flex flex-col items-center justify-center rounded-lg border border-dashed p-12 text-center"
+        >
+          <Icons.cloud className="h-12 w-12 text-muted-foreground/50" />
+          <h3 className="mt-4 text-lg font-semibold">No tenants found</h3>
+          <p className="text-muted-foreground">
+            No tenants match your current filter. Try adjusting your filters or connect a new tenant.
+          </p>
+          <Link href="/dashboard/tenants/connect" className="mt-4">
+            <Button>
+              <Icons.add className="mr-2 h-4 w-4" />
+              Connect Tenant
+            </Button>
+          </Link>
+        </motion.div>
+      )}
     </motion.div>
   );
 }
@@ -215,12 +309,21 @@ function TenantCard({ tenant }: { tenant: Tenant }) {
     syncing: { color: 'bg-blue-500', label: 'Syncing' },
   };
 
-  const stats = [
+  const getMicrosoftStats = () => [
     { label: 'Users', value: tenant.userCount, icon: Icons.users },
     { label: 'Mailboxes', value: tenant.mailboxCount, icon: Icons.mail },
     { label: 'Sites', value: tenant.siteCount, icon: Icons.drive },
     { label: 'Teams', value: tenant.teamCount, icon: Icons.teams },
   ];
+
+  const getGoogleStats = () => [
+    { label: 'Users', value: tenant.userCount, icon: Icons.users },
+    { label: 'Gmail', value: tenant.mailboxCount, icon: Icons.gmail },
+    { label: 'Drive', value: tenant.userCount, icon: Icons.googleDrive },
+    { label: 'Groups', value: tenant.teamCount, icon: Icons.googleGroups },
+  ];
+
+  const stats = tenant.platform === 'microsoft' ? getMicrosoftStats() : getGoogleStats();
 
   return (
     <motion.div
@@ -235,21 +338,40 @@ function TenantCard({ tenant }: { tenant: Tenant }) {
         <CardHeader className="pb-4">
           <div className="flex items-start justify-between">
             <div className="flex items-center gap-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10">
-                <Icons.microsoft className="h-6 w-6" />
+              <div className={cn(
+                'flex h-12 w-12 items-center justify-center rounded-lg',
+                tenant.platform === 'microsoft' ? 'bg-blue-100' : 'bg-red-100'
+              )}>
+                {tenant.platform === 'microsoft' ? (
+                  <Icons.microsoft className="h-6 w-6" />
+                ) : (
+                  <Icons.googleWorkspace className="h-6 w-6" />
+                )}
               </div>
               <div>
                 <CardTitle className="text-lg">{tenant.name}</CardTitle>
                 <CardDescription className="text-xs">{tenant.domain}</CardDescription>
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              <Badge
-                variant={tenant.type === 'source' ? 'default' : 'secondary'}
-                className="capitalize"
-              >
-                {tenant.type}
-              </Badge>
+            <div className="flex flex-col items-end gap-2">
+              <div className="flex items-center gap-2">
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    tenant.platform === 'microsoft'
+                      ? 'bg-blue-50 text-blue-700 border-blue-200'
+                      : 'bg-red-50 text-red-700 border-red-200'
+                  )}
+                >
+                  {tenant.platform === 'microsoft' ? 'M365' : 'Google'}
+                </Badge>
+                <Badge
+                  variant={tenant.type === 'source' ? 'default' : 'secondary'}
+                  className="capitalize"
+                >
+                  {tenant.type}
+                </Badge>
+              </div>
               <div className="flex items-center gap-1.5">
                 <div
                   className={cn(

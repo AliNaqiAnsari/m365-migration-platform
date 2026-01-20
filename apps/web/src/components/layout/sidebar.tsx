@@ -60,13 +60,13 @@ export function Sidebar() {
         })}
       </nav>
 
-      {/* Coming Soon Badge */}
-      <div className="mx-4 mb-4 rounded-lg border border-dashed p-3">
+      {/* Google Workspace Support */}
+      <div className="mx-4 mb-4 rounded-lg border border-primary/20 bg-primary/5 p-3">
         <div className="flex items-center gap-2">
-          <Icons.workspace className="h-5 w-5 text-muted-foreground" />
+          <Icons.googleWorkspace className="h-5 w-5" />
           <div>
             <p className="text-sm font-medium">Google Workspace</p>
-            <p className="text-xs text-muted-foreground">Coming Soon</p>
+            <p className="text-xs text-muted-foreground">Cross-platform Ready</p>
           </div>
         </div>
       </div>

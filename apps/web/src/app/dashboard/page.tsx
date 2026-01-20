@@ -7,33 +7,41 @@ import { Button } from '@/components/ui/button';
 import { Icons } from '@/components/icons';
 import { cn } from '@/lib/utils';
 
-const stats = [
+type ChangeType = 'positive' | 'negative' | 'neutral';
+
+const stats: Array<{
+  title: string;
+  value: string;
+  change: string;
+  changeType: ChangeType;
+  icon: typeof Icons.migration;
+}> = [
   {
     title: 'Active Migrations',
     value: '3',
     change: '+2 this week',
-    changeType: 'positive' as const,
+    changeType: 'positive',
     icon: Icons.migration,
   },
   {
     title: 'Connected Tenants',
     value: '4',
     change: '2 source, 2 destination',
-    changeType: 'neutral' as const,
+    changeType: 'neutral',
     icon: Icons.cloud,
   },
   {
     title: 'Data Migrated',
     value: '1.2 TB',
     change: '+340 GB this month',
-    changeType: 'positive' as const,
+    changeType: 'positive',
     icon: Icons.database,
   },
   {
     title: 'Backups',
     value: '12',
     change: 'All healthy',
-    changeType: 'positive' as const,
+    changeType: 'positive',
     icon: Icons.archive,
   },
 ];
