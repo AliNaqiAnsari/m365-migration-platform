@@ -4,12 +4,14 @@ import type { PrismaClient } from '@m365-migration/database';
 import * as bcrypt from 'bcryptjs';
 import * as jwt from 'jsonwebtoken';
 import * as crypto from 'crypto';
+import { EmailService } from '../../common/services/email.service';
 
 @Injectable()
 export class AuthService {
   constructor(
     @Inject('PRISMA') private prisma: PrismaClient,
     private config: ConfigService,
+    private emailService: EmailService,
   ) {}
 
   async register(data: { email: string; password: string; name: string; organizationName: string }) {
@@ -142,9 +144,9 @@ export class AuthService {
       data: { mfaSecret: `reset:${resetTokenHash}:${Date.now() + 3600000}` },
     });
 
-    const resetUrl = `${this.config.get('frontendUrl')}/reset-password/${resetToken}`;
-    // TODO: Send email via EmailService
-    console.log(`Password reset requested for ${email}: ${resetUrl}`);
+    await this.emailService.sendPasswordReset(email, resetToken).catch((err) => {
+      console.error(`Failed to send password reset email to ${email}:`, err);
+    });
 
     return { message: 'If an account exists, a reset link has been sent' };
   }

@@ -1,4 +1,4 @@
-import { Global, Module } from '@nestjs/common';
+import { Global, Module, OnModuleDestroy } from '@nestjs/common';
 import { PrismaClient } from '@m365-migration/database';
 
 const prisma = new PrismaClient({
@@ -15,4 +15,8 @@ const prisma = new PrismaClient({
   ],
   exports: ['PRISMA'],
 })
-export class DatabaseModule {}
+export class DatabaseModule implements OnModuleDestroy {
+  async onModuleDestroy() {
+    await prisma.$disconnect();
+  }
+}

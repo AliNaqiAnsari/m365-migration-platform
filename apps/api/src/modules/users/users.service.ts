@@ -2,12 +2,14 @@ import { Injectable, Inject, NotFoundException, BadRequestException, ConflictExc
 import { ConfigService } from '@nestjs/config';
 import { randomBytes } from 'crypto';
 import type { PrismaClient, UserRole } from '@m365-migration/database';
+import { EmailService } from '../../common/services/email.service';
 
 @Injectable()
 export class UsersService {
   constructor(
     @Inject('PRISMA') private prisma: PrismaClient,
     private config: ConfigService,
+    private emailService: EmailService,
   ) {}
 
   async list(organizationId: string) {
@@ -68,7 +70,18 @@ export class UsersService {
       },
     });
 
-    // TODO: Send invitation email via EmailService
+    // Send invitation email
+    const org = await this.prisma.organization.findUnique({ where: { id: organizationId }, select: { name: true } });
+    const inviter = await this.prisma.user.findUnique({ where: { id: invitedBy }, select: { name: true } });
+    await this.emailService.sendInvitation(
+      data.email,
+      token,
+      org?.name ?? 'your organization',
+      inviter?.name ?? 'A team member',
+    ).catch((err) => {
+      console.error(`Failed to send invitation email to ${data.email}:`, err);
+    });
+
     const inviteUrl = `${this.config.get('frontendUrl')}/invite/${token}`;
 
     return {
