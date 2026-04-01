@@ -1,114 +1,124 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Delete,
-  Param,
-  Body,
-  Query,
-  UseGuards,
-} from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
-
+import { Controller, Get, Post, Delete, Param, Body, Query, UseGuards } from '@nestjs/common';
 import { MigrationsService } from './migrations.service';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current-user.decorator';
+import { AuthGuard } from '../../common/guards/auth.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
+import { PlanGuard, PlanCheck } from '../../common/guards/plan.guard';
+import { Roles } from '../../common/decorators/roles.decorator';
+import { CurrentUser, type CurrentUserData } from '../../common/decorators/current-user.decorator';
+import { IsString, IsArray, IsOptional, IsObject } from 'class-validator';
 
-@ApiTags('migrations')
-@Controller({ path: 'migrations', version: '1' })
-@UseGuards(JwtAuthGuard)
-@ApiBearerAuth()
+class CreateMigrationDto {
+  @IsString()
+  name: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @IsString()
+  sourceTenantId: string;
+
+  @IsString()
+  destTenantId: string;
+
+  @IsOptional()
+  @IsString()
+  jobType?: string;
+
+  @IsArray()
+  @IsString({ each: true })
+  workloads: string[];
+
+  @IsOptional()
+  @IsObject()
+  options?: Record<string, unknown>;
+}
+
+@Controller('migrations')
+@UseGuards(AuthGuard, RolesGuard)
 export class MigrationsController {
-  constructor(private readonly migrationsService: MigrationsService) {}
+  constructor(private migrationsService: MigrationsService) {}
 
   @Get()
-  @ApiOperation({ summary: 'List migration jobs' })
-  @ApiQuery({ name: 'page', required: false, type: Number })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
-  @ApiQuery({ name: 'status', required: false, type: String })
-  async listJobs(
-    @CurrentUser() user: CurrentUserPayload,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
+  list(
+    @CurrentUser() user: CurrentUserData,
     @Query('status') status?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
   ) {
-    return this.migrationsService.findAll(user.organizationId, { page, limit, status });
-  }
-
-  @Get(':id')
-  @ApiOperation({ summary: 'Get migration job details' })
-  async getJob(@CurrentUser() user: CurrentUserPayload, @Param('id') id: string) {
-    return this.migrationsService.findById(id, user.organizationId);
-  }
-
-  @Post()
-  @ApiOperation({ summary: 'Create new migration job' })
-  async createJob(
-    @CurrentUser() user: CurrentUserPayload,
-    @Body() body: {
-      name: string;
-      description?: string;
-      sourceTenantId: string;
-      destinationTenantId: string;
-      jobType: string;
-      workloads: string[];
-      scope: object;
-      options?: object;
-      scheduledAt?: string;
-    },
-  ) {
-    return this.migrationsService.create(user.organizationId, user.id, {
-      ...body,
-      scheduledAt: body.scheduledAt ? new Date(body.scheduledAt) : undefined,
+    return this.migrationsService.list(user.organizationId, {
+      status,
+      page: page ? parseInt(page, 10) : undefined,
+      pageSize: pageSize ? parseInt(pageSize, 10) : undefined,
     });
   }
 
+  @Get(':id')
+  getById(@Param('id') id: string, @CurrentUser() user: CurrentUserData) {
+    return this.migrationsService.getById(id, user.organizationId);
+  }
+
+  @Post()
+  @Roles('MEMBER')
+  @UseGuards(PlanGuard)
+  @PlanCheck({ type: 'workload_access' })
+  create(@Body() dto: CreateMigrationDto, @CurrentUser() user: CurrentUserData) {
+    return this.migrationsService.create(user.organizationId, dto);
+  }
+
   @Post(':id/start')
-  @ApiOperation({ summary: 'Start migration job' })
-  async startJob(@CurrentUser() user: CurrentUserPayload, @Param('id') id: string) {
+  @Roles('MEMBER')
+  @UseGuards(PlanGuard)
+  @PlanCheck({ type: 'concurrent_jobs' })
+  start(@Param('id') id: string, @CurrentUser() user: CurrentUserData) {
     return this.migrationsService.start(id, user.organizationId);
   }
 
   @Post(':id/pause')
-  @ApiOperation({ summary: 'Pause migration job' })
-  async pauseJob(@CurrentUser() user: CurrentUserPayload, @Param('id') id: string) {
+  @Roles('MEMBER')
+  pause(@Param('id') id: string, @CurrentUser() user: CurrentUserData) {
     return this.migrationsService.pause(id, user.organizationId);
   }
 
   @Post(':id/resume')
-  @ApiOperation({ summary: 'Resume migration job' })
-  async resumeJob(@CurrentUser() user: CurrentUserPayload, @Param('id') id: string) {
+  @Roles('MEMBER')
+  resume(@Param('id') id: string, @CurrentUser() user: CurrentUserData) {
     return this.migrationsService.resume(id, user.organizationId);
   }
 
   @Post(':id/cancel')
-  @ApiOperation({ summary: 'Cancel migration job' })
-  async cancelJob(@CurrentUser() user: CurrentUserPayload, @Param('id') id: string) {
+  @Roles('ADMIN')
+  cancel(@Param('id') id: string, @CurrentUser() user: CurrentUserData) {
     return this.migrationsService.cancel(id, user.organizationId);
   }
 
-  @Delete(':id')
-  @ApiOperation({ summary: 'Delete migration job' })
-  async deleteJob(@CurrentUser() user: CurrentUserPayload, @Param('id') id: string) {
-    return this.migrationsService.delete(id, user.organizationId);
-  }
-
   @Get(':id/tasks')
-  @ApiOperation({ summary: 'Get migration tasks' })
-  async getTasks(@CurrentUser() user: CurrentUserPayload, @Param('id') id: string) {
+  getTasks(@Param('id') id: string, @CurrentUser() user: CurrentUserData) {
     return this.migrationsService.getTasks(id, user.organizationId);
   }
 
   @Get(':id/errors')
-  @ApiOperation({ summary: 'Get migration errors' })
-  @ApiQuery({ name: 'page', required: false, type: Number })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
-  async getErrors(
-    @CurrentUser() user: CurrentUserPayload,
+  getErrors(
     @Param('id') id: string,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
+    @CurrentUser() user: CurrentUserData,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
   ) {
-    return this.migrationsService.getErrors(id, user.organizationId, { page, limit });
+    return this.migrationsService.getErrors(
+      id,
+      user.organizationId,
+      page ? parseInt(page, 10) : undefined,
+      pageSize ? parseInt(pageSize, 10) : undefined,
+    );
+  }
+
+  @Get(':id/report')
+  getReport(@Param('id') id: string, @CurrentUser() user: CurrentUserData) {
+    return this.migrationsService.getReport(id, user.organizationId);
+  }
+
+  @Get(':id/dead-letter')
+  getDeadLetterItems(@Param('id') id: string, @CurrentUser() user: CurrentUserData) {
+    return this.migrationsService.getDeadLetterItems(id, user.organizationId);
   }
 }

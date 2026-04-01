@@ -1,403 +1,253 @@
 import { Job } from 'bullmq';
-import { BaseProcessor, MigrationJobData, ProcessorResult } from './base.processor';
+import { BaseProcessor } from './base.processor';
+import type { MigrationTaskPayload } from '@m365-migration/types';
+import type { GraphClient } from '@m365-migration/graph-client';
+import { GraphApiError } from '@m365-migration/graph-client';
 
-interface SharePointSite {
-  id: string;
-  displayName: string;
-  webUrl: string;
-}
+export class SharePointProcessor extends BaseProcessor<MigrationTaskPayload> {
+  readonly queueName = 'sharepoint';
+  readonly concurrency = 8;
 
-interface DriveItem {
-  id: string;
-  name: string;
-  size: number;
-  folder?: { childCount: number };
-  file?: { mimeType: string };
-  webUrl: string;
-}
+  async process(job: Job<MigrationTaskPayload>): Promise<void> {
+    const { taskId, jobId, sourceTenantId, destTenantId, sourceObjectId, destObjectId } = job.data;
 
-export class SharePointProcessor extends BaseProcessor {
-  async process(job: Job<MigrationJobData>): Promise<ProcessorResult> {
-    const { sourceTenantId, destinationTenantId, sourceId, taskId } = job.data;
+    if (!destObjectId) {
+      await this.updateTaskProgress(taskId, { status: 'FAILED' });
+      return;
+    }
 
-    this.logger.info({ taskId, sourceId }, 'Starting SharePoint migration');
+    await this.updateTaskProgress(taskId, { status: 'IN_PROGRESS' });
 
-    const result: ProcessorResult = {
-      success: true,
-      itemsProcessed: 0,
-      itemsFailed: 0,
-      bytesTransferred: 0,
-      errors: [],
-    };
+    const sourceGraph = await this.createGraphClient(sourceTenantId);
+    const destGraph = await this.createGraphClient(destTenantId);
 
     try {
-      const sourceClient = await this.getGraphClient(sourceTenantId);
-      const destClient = await this.getGraphClient(destinationTenantId);
-
-      // Get site information
-      const site = await this.getSite(sourceClient, sourceId);
-      this.logger.info({ site: site.displayName }, 'Processing SharePoint site');
-
-      // Create or get destination site
-      const destSite = await this.ensureDestinationSite(destClient, site);
-
-      // Get document libraries
-      const libraries = await this.getDocumentLibraries(sourceClient, sourceId);
-      this.logger.info({ libraryCount: libraries.length }, 'Found document libraries');
-
-      for (let i = 0; i < libraries.length; i++) {
-        const library = libraries[i];
-
-        try {
-          // Migrate library
-          const libResult = await this.migrateDocumentLibrary(
-            sourceClient,
-            destClient,
-            sourceId,
-            destSite.id,
-            library,
-            job,
-          );
-
-          result.itemsProcessed += libResult.processed;
-          result.itemsFailed += libResult.failed;
-          result.bytesTransferred += libResult.bytesTransferred;
-
-          // Update progress
-          const progress = Math.round(((i + 1) / libraries.length) * 100);
-          await job.updateProgress(progress);
-
-        } catch (error: any) {
-          this.logger.error({ library: library.name, error: error.message }, 'Failed to migrate library');
-          result.errors.push(`Failed to migrate library ${library.name}: ${error.message}`);
-        }
-      }
-
-      // Migrate lists
-      const listsResult = await this.migrateLists(sourceClient, destClient, sourceId, destSite.id, job);
-      result.itemsProcessed += listsResult.processed;
-      result.itemsFailed += listsResult.failed;
-
-      result.success = result.itemsFailed === 0;
-
-    } catch (error: any) {
-      this.logger.error({ taskId, error: error.message }, 'SharePoint migration failed');
-      result.success = false;
-      result.errors.push(error.message);
+      await this.migrateSite(jobId, taskId, sourceGraph, destGraph, sourceObjectId, destObjectId);
+      await this.updateTaskProgress(taskId, { status: 'COMPLETED', progressPercent: 100 });
+    } catch (error) {
+      this.logger.error({ taskId, error }, 'SharePoint migration failed');
+      await this.updateTaskProgress(taskId, { status: 'FAILED' });
+      throw error;
     }
 
-    return result;
+    await this.updateJobProgress(jobId);
   }
 
-  private async getSite(client: any, siteId: string): Promise<SharePointSite> {
-    return this.retryWithBackoff(async () => {
-      return client.api(`/sites/${siteId}`).get();
-    });
-  }
+  private async migrateSite(
+    jobId: string, taskId: string,
+    source: GraphClient, dest: GraphClient,
+    sourceSiteId: string, destSiteId: string,
+  ): Promise<void> {
+    this.logger.info({ taskId, sourceSiteId, destSiteId }, 'Migrating SharePoint site');
 
-  private async ensureDestinationSite(client: any, sourceSite: SharePointSite): Promise<SharePointSite> {
-    // In production, this would create or find the matching destination site
-    // For now, we'll assume a site with the same name exists
-    const response = await this.retryWithBackoff(async () => {
-      return client
-        .api('/sites')
-        .filter(`displayName eq '${sourceSite.displayName}'`)
-        .get();
-    });
-
-    if (response.value.length > 0) {
-      return response.value[0];
-    }
-
-    // Create site if not found
-    throw new Error('Destination site not found. Please create the site manually first.');
-  }
-
-  private async getDocumentLibraries(client: any, siteId: string): Promise<any[]> {
-    const response = await this.retryWithBackoff(async () => {
-      return client.api(`/sites/${siteId}/drives`).get();
-    });
-    return response.value;
-  }
-
-  private async migrateDocumentLibrary(
-    sourceClient: any,
-    destClient: any,
-    sourceSiteId: string,
-    destSiteId: string,
-    library: any,
-    job: Job<MigrationJobData>,
-  ): Promise<{ processed: number; failed: number; bytesTransferred: number }> {
-    let processed = 0;
-    let failed = 0;
-    let bytesTransferred = 0;
-
-    this.logger.info({ library: library.name }, 'Migrating document library');
-
-    // Get destination library
-    const destLibraries = await this.retryWithBackoff(async () => {
-      return destClient.api(`/sites/${destSiteId}/drives`).get();
-    });
-
-    let destLibrary = destLibraries.value.find((l: any) => l.name === library.name);
-
-    if (!destLibrary) {
-      // Create library in destination
-      destLibrary = await this.retryWithBackoff(async () => {
-        return destClient.api(`/sites/${destSiteId}/lists`).post({
-          displayName: library.name,
-          list: {
-            template: 'documentLibrary',
-          },
-        });
-      });
-    }
-
-    // Migrate items recursively
-    const itemResult = await this.migrateItems(
-      sourceClient,
-      destClient,
-      library.id,
-      destLibrary.id,
-      'root',
-      job,
+    // Get all document libraries from source site
+    const sourceLists = await source.request<{ value: any[] }>(
+      `/sites/${sourceSiteId}/lists?$select=id,displayName,list&$filter=list/template eq 'documentLibrary'`,
     );
 
-    processed += itemResult.processed;
-    failed += itemResult.failed;
-    bytesTransferred += itemResult.bytesTransferred;
+    for (const list of sourceLists.value) {
+      this.logger.info({ taskId, listName: list.displayName }, 'Migrating document library');
 
-    return { processed, failed, bytesTransferred };
-  }
+      // Find or create corresponding library in destination
+      let destListId: string | null = null;
+      try {
+        const destLists = await dest.request<{ value: any[] }>(
+          `/sites/${destSiteId}/lists?$select=id,displayName&$filter=displayName eq '${list.displayName.replace(/'/g, "''")}'`,
+        );
+        destListId = destLists.value[0]?.id;
+      } catch {
+        // List may not exist
+      }
 
-  private async migrateItems(
-    sourceClient: any,
-    destClient: any,
-    sourceDriveId: string,
-    destDriveId: string,
-    parentPath: string,
-    job: Job<MigrationJobData>,
-  ): Promise<{ processed: number; failed: number; bytesTransferred: number }> {
-    let processed = 0;
-    let failed = 0;
-    let bytesTransferred = 0;
-    let nextLink: string | undefined;
-
-    do {
-      const response = await this.retryWithBackoff(async () => {
-        if (nextLink) {
-          return sourceClient.api(nextLink).get();
-        }
-        return sourceClient
-          .api(`/drives/${sourceDriveId}/items/${parentPath}/children`)
-          .top(50)
-          .get();
-      });
-
-      for (const item of response.value as DriveItem[]) {
+      if (!destListId) {
         try {
-          if (item.folder) {
-            // Create folder in destination
-            await this.retryWithBackoff(async () => {
-              await destClient.api(`/drives/${destDriveId}/items/${parentPath}/children`).post({
-                name: item.name,
-                folder: {},
-              });
-            });
-
-            // Recursively migrate folder contents
-            const folderResult = await this.migrateItems(
-              sourceClient,
-              destClient,
-              sourceDriveId,
-              destDriveId,
-              item.id,
-              job,
-            );
-
-            processed += folderResult.processed;
-            failed += folderResult.failed;
-            bytesTransferred += folderResult.bytesTransferred;
-
-          } else if (item.file) {
-            // Download file content
-            const content = await this.retryWithBackoff(async () => {
-              return sourceClient
-                .api(`/drives/${sourceDriveId}/items/${item.id}/content`)
-                .get();
-            });
-
-            // Upload to destination
-            if (item.size < 4 * 1024 * 1024) {
-              // Small file - simple upload
-              await this.retryWithBackoff(async () => {
-                await destClient
-                  .api(`/drives/${destDriveId}/items/${parentPath}:/${item.name}:/content`)
-                  .put(content);
-              });
-            } else {
-              // Large file - resumable upload
-              await this.uploadLargeFile(destClient, destDriveId, parentPath, item.name, content, item.size);
-            }
-
-            bytesTransferred += item.size;
-          }
-
-          processed++;
-
-        } catch (error: any) {
-          this.logger.error({ itemId: item.id, name: item.name, error: error.message }, 'Failed to migrate item');
-          failed++;
+          const created = await dest.request<any>(`/sites/${destSiteId}/lists`, {
+            method: 'POST',
+            body: {
+              displayName: list.displayName,
+              list: { template: 'documentLibrary' },
+            },
+          });
+          destListId = created.id;
+        } catch (error) {
+          await this.logError(taskId, {
+            itemId: list.id,
+            itemName: list.displayName,
+            itemType: 'document_library',
+            errorCode: 'CREATE_LIBRARY_FAILED',
+            errorMessage: String(error),
+            retryable: true,
+          });
+          continue;
         }
       }
 
-      nextLink = response['@odata.nextLink'];
-    } while (nextLink);
+      // Get the drive ID for source and destination libraries
+      const sourceDrive = await source.request<any>(`/sites/${sourceSiteId}/lists/${list.id}/drive`);
+      const destDrive = await dest.request<any>(`/sites/${destSiteId}/lists/${destListId}/drive`);
 
-    return { processed, failed, bytesTransferred };
+      // Recursively copy files
+      await this.copyDriveContents(
+        taskId, source, dest,
+        sourceDrive.id, destDrive.id,
+        'root', '',
+      );
+    }
+
+    // Migrate custom lists (non-document libraries)
+    await this.migrateLists(taskId, source, dest, sourceSiteId, destSiteId);
   }
 
-  private async uploadLargeFile(
-    client: any,
-    driveId: string,
-    parentPath: string,
-    fileName: string,
-    content: Buffer,
-    fileSize: number,
+  private async copyDriveContents(
+    taskId: string,
+    source: GraphClient, dest: GraphClient,
+    sourceDriveId: string, destDriveId: string,
+    folderId: string, destPath: string,
   ): Promise<void> {
-    // Create upload session
-    const uploadSession = await this.retryWithBackoff(async () => {
-      return client
-        .api(`/drives/${driveId}/items/${parentPath}:/${fileName}:/createUploadSession`)
-        .post({
-          item: {
-            '@microsoft.graph.conflictBehavior': 'replace',
-          },
-        });
-    });
+    const path = folderId === 'root'
+      ? `/drives/${sourceDriveId}/root/children`
+      : `/drives/${sourceDriveId}/items/${folderId}/children`;
 
-    const uploadUrl = uploadSession.uploadUrl;
-    const chunkSize = 10 * 1024 * 1024; // 10MB chunks
-    let offset = 0;
+    for await (const items of source.paginate<any>(`${path}?$select=id,name,size,file,folder&$top=200`)) {
+      for (const item of items) {
+        try {
+          if (item.folder) {
+            // Create folder
+            const folderPath = destPath ? `${destPath}/${item.name}` : item.name;
+            try {
+              await dest.request(`/drives/${destDriveId}/root:/${folderPath}`, {
+                method: 'PATCH',
+                body: { folder: {}, name: item.name },
+              });
+            } catch {
+              await dest.request(`/drives/${destDriveId}/root/children`, {
+                method: 'POST',
+                body: { name: item.name, folder: {}, '@microsoft.graph.conflictBehavior': 'replace' },
+              });
+            }
+            await this.copyDriveContents(taskId, source, dest, sourceDriveId, destDriveId, item.id, folderPath);
+          } else if (item.file) {
+            // Get download URL
+            const sourceItem = await source.request<any>(
+              `/drives/${sourceDriveId}/items/${item.id}?$select=@microsoft.graph.downloadUrl`,
+            );
+            const downloadUrl = sourceItem['@microsoft.graph.downloadUrl'];
+            if (!downloadUrl) continue;
 
-    while (offset < fileSize) {
-      const length = Math.min(chunkSize, fileSize - offset);
-      const chunk = content.slice(offset, offset + length);
+            const filePath = destPath ? `${destPath}/${item.name}` : item.name;
+            const fileSize = item.size ?? 0;
 
-      await this.retryWithBackoff(async () => {
-        await fetch(uploadUrl, {
-          method: 'PUT',
-          headers: {
-            'Content-Length': length.toString(),
-            'Content-Range': `bytes ${offset}-${offset + length - 1}/${fileSize}`,
-          },
-          body: chunk,
-        });
-      });
+            if (fileSize <= 4 * 1024 * 1024) {
+              // Simple upload
+              const response = await fetch(downloadUrl);
+              const buffer = await response.arrayBuffer();
+              await dest.request(
+                `/drives/${destDriveId}/root:/${encodeURIComponent(filePath)}:/content`,
+                { method: 'PUT', body: buffer, headers: { 'Content-Type': 'application/octet-stream' } },
+              );
+            } else {
+              // Chunked upload
+              const session = await dest.createUploadSession(
+                `/drives/${destDriveId}/root:/${encodeURIComponent(filePath)}:`,
+                item.name,
+              );
+              const response = await fetch(downloadUrl);
+              if (!response.body) continue;
 
-      offset += length;
+              const reader = response.body.getReader();
+              let offset = 0;
+              const chunkSize = 10 * 1024 * 1024;
+              let buffer = new Uint8Array(0);
+
+              while (true) {
+                const { done, value } = await reader.read();
+                if (value) {
+                  const newBuf = new Uint8Array(buffer.length + value.length);
+                  newBuf.set(buffer);
+                  newBuf.set(value, buffer.length);
+                  buffer = newBuf;
+                }
+                while (buffer.length >= chunkSize || (done && buffer.length > 0)) {
+                  const size = Math.min(buffer.length, chunkSize);
+                  const chunk = buffer.slice(0, size);
+                  await dest.uploadChunk(
+                    session.uploadUrl,
+                    chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength),
+                    offset, offset + size - 1, fileSize,
+                  );
+                  offset += size;
+                  buffer = buffer.slice(size);
+                  if (done && buffer.length === 0) break;
+                }
+                if (done) break;
+              }
+            }
+          }
+        } catch (error) {
+          await this.logError(taskId, {
+            itemId: item.id,
+            itemName: item.name,
+            itemType: item.folder ? 'folder' : 'file',
+            errorCode: 'SP_ITEM_FAILED',
+            errorMessage: String(error),
+            retryable: error instanceof GraphApiError && (error.isTransient || error.isThrottled),
+          });
+        }
+      }
     }
   }
 
   private async migrateLists(
-    sourceClient: any,
-    destClient: any,
-    sourceSiteId: string,
-    destSiteId: string,
-    job: Job<MigrationJobData>,
-  ): Promise<{ processed: number; failed: number }> {
-    let processed = 0;
-    let failed = 0;
+    taskId: string,
+    source: GraphClient, dest: GraphClient,
+    sourceSiteId: string, destSiteId: string,
+  ): Promise<void> {
+    // Get custom lists (exclude document libraries and system lists)
+    const lists = await source.request<{ value: any[] }>(
+      `/sites/${sourceSiteId}/lists?$select=id,displayName,list,description`,
+    );
 
-    this.logger.info('Migrating SharePoint lists');
+    for (const list of lists.value) {
+      if (list.list?.template === 'documentLibrary' || list.list?.hidden) continue;
 
-    // Get source lists
-    const response = await this.retryWithBackoff(async () => {
-      return sourceClient.api(`/sites/${sourceSiteId}/lists`).get();
-    });
-
-    for (const list of response.value) {
-      // Skip system lists and document libraries
-      if (list.system || list.list?.template === 'documentLibrary') {
-        continue;
-      }
+      this.logger.info({ taskId, listName: list.displayName }, 'Migrating list');
 
       try {
         // Create list in destination
-        await this.retryWithBackoff(async () => {
-          await destClient.api(`/sites/${destSiteId}/lists`).post({
+        const created = await dest.request<any>(`/sites/${destSiteId}/lists`, {
+          method: 'POST',
+          body: {
             displayName: list.displayName,
-            list: {
-              template: list.list?.template || 'genericList',
-            },
-          });
+            description: list.description,
+            list: { template: list.list?.template ?? 'genericList' },
+          },
         });
 
-        // Migrate list items
-        const itemsResult = await this.migrateListItems(
-          sourceClient,
-          destClient,
-          sourceSiteId,
-          destSiteId,
-          list.id,
-          job,
-        );
-
-        processed += itemsResult.processed;
-        failed += itemsResult.failed;
-
-      } catch (error: any) {
-        this.logger.error({ listId: list.id, error: error.message }, 'Failed to migrate list');
-        failed++;
+        // Copy list items
+        for await (const items of source.paginate<any>(
+          `/sites/${sourceSiteId}/lists/${list.id}/items?$expand=fields&$top=100`,
+        )) {
+          for (const item of items) {
+            try {
+              await dest.request(`/sites/${destSiteId}/lists/${created.id}/items`, {
+                method: 'POST',
+                body: { fields: item.fields },
+              });
+            } catch {
+              // Skip items that fail (column mismatch, etc.)
+            }
+          }
+        }
+      } catch (error) {
+        await this.logError(taskId, {
+          itemId: list.id,
+          itemName: list.displayName,
+          itemType: 'list',
+          errorCode: 'LIST_MIGRATION_FAILED',
+          errorMessage: String(error),
+          retryable: true,
+        });
       }
     }
-
-    return { processed, failed };
-  }
-
-  private async migrateListItems(
-    sourceClient: any,
-    destClient: any,
-    sourceSiteId: string,
-    destSiteId: string,
-    listId: string,
-    job: Job<MigrationJobData>,
-  ): Promise<{ processed: number; failed: number }> {
-    let processed = 0;
-    let failed = 0;
-    let nextLink: string | undefined;
-
-    do {
-      const response = await this.retryWithBackoff(async () => {
-        if (nextLink) {
-          return sourceClient.api(nextLink).get();
-        }
-        return sourceClient
-          .api(`/sites/${sourceSiteId}/lists/${listId}/items`)
-          .expand('fields')
-          .top(50)
-          .get();
-      });
-
-      for (const item of response.value) {
-        try {
-          await this.retryWithBackoff(async () => {
-            await destClient
-              .api(`/sites/${destSiteId}/lists/${listId}/items`)
-              .post({
-                fields: item.fields,
-              });
-          });
-          processed++;
-        } catch (error: any) {
-          this.logger.error({ itemId: item.id, error: error.message }, 'Failed to migrate list item');
-          failed++;
-        }
-      }
-
-      nextLink = response['@odata.nextLink'];
-    } while (nextLink);
-
-    return { processed, failed };
   }
 }

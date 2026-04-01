@@ -1,35 +1,34 @@
 import { Controller, Get, Patch, Body, UseGuards } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-
 import { OrganizationsService } from './organizations.service';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current-user.decorator';
+import { AuthGuard } from '../../common/guards/auth.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
+import { Roles } from '../../common/decorators/roles.decorator';
+import { CurrentUser, type CurrentUserData } from '../../common/decorators/current-user.decorator';
+import { IsString, IsOptional, IsEmail } from 'class-validator';
 
-@ApiTags('organizations')
-@Controller({ path: 'organizations', version: '1' })
-@UseGuards(JwtAuthGuard)
-@ApiBearerAuth()
+class UpdateOrganizationDto {
+  @IsOptional()
+  @IsString()
+  name?: string;
+
+  @IsOptional()
+  @IsEmail()
+  billingEmail?: string;
+}
+
+@Controller('organizations')
+@UseGuards(AuthGuard, RolesGuard)
 export class OrganizationsController {
-  constructor(private readonly organizationsService: OrganizationsService) {}
+  constructor(private organizationsService: OrganizationsService) {}
 
   @Get('current')
-  @ApiOperation({ summary: 'Get current organization' })
-  async getCurrentOrganization(@CurrentUser() user: CurrentUserPayload) {
-    return this.organizationsService.findById(user.organizationId);
+  getCurrent(@CurrentUser() user: CurrentUserData) {
+    return this.organizationsService.getCurrent(user.organizationId);
   }
 
   @Patch('current')
-  @ApiOperation({ summary: 'Update current organization' })
-  async updateOrganization(
-    @CurrentUser() user: CurrentUserPayload,
-    @Body() body: { name?: string; billingEmail?: string; settings?: Record<string, unknown> },
-  ) {
-    return this.organizationsService.update(user.organizationId, body);
-  }
-
-  @Get('current/stats')
-  @ApiOperation({ summary: 'Get organization statistics' })
-  async getStats(@CurrentUser() user: CurrentUserPayload) {
-    return this.organizationsService.getStats(user.organizationId);
+  @Roles('ADMIN')
+  update(@Body() dto: UpdateOrganizationDto, @CurrentUser() user: CurrentUserData) {
+    return this.organizationsService.update(user.organizationId, dto);
   }
 }

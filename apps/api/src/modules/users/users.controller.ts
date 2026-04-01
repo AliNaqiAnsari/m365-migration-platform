@@ -1,98 +1,74 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Patch,
-  Delete,
-  Body,
-  Param,
-  Query,
-  UseGuards,
-} from '@nestjs/common';
-import {
-  ApiTags,
-  ApiOperation,
-  ApiResponse,
-  ApiBearerAuth,
-  ApiQuery,
-} from '@nestjs/swagger';
-
+import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards } from '@nestjs/common';
 import { UsersService } from './users.service';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current-user.decorator';
+import { AuthGuard } from '../../common/guards/auth.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
+import { Roles } from '../../common/decorators/roles.decorator';
+import { CurrentUser, type CurrentUserData } from '../../common/decorators/current-user.decorator';
+import { IsString, IsEmail, IsOptional, MinLength } from 'class-validator';
 
-@ApiTags('users')
-@Controller({ path: 'users', version: '1' })
-@UseGuards(JwtAuthGuard)
-@ApiBearerAuth()
+class InviteUserDto {
+  @IsEmail()
+  email: string;
+
+  @IsOptional()
+  @IsString()
+  role?: string;
+}
+
+class AcceptInviteDto {
+  @IsString()
+  name: string;
+
+  @IsString()
+  @MinLength(8)
+  password: string;
+}
+
+class UpdateRoleDto {
+  @IsString()
+  role: string;
+}
+
+@Controller('users')
+@UseGuards(AuthGuard, RolesGuard)
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(private usersService: UsersService) {}
 
   @Get()
-  @ApiOperation({ summary: 'List users in organization' })
-  @ApiQuery({ name: 'page', required: false, type: Number })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
-  @ApiQuery({ name: 'search', required: false, type: String })
-  @ApiQuery({ name: 'role', required: false, type: String })
-  async listUsers(
-    @CurrentUser() user: CurrentUserPayload,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
-    @Query('search') search?: string,
-    @Query('role') role?: string,
-  ) {
-    return this.usersService.findByOrganization(user.organizationId, {
-      page,
-      limit,
-      search,
-      role,
-    });
+  list(@CurrentUser() user: CurrentUserData) {
+    return this.usersService.list(user.organizationId);
   }
 
-  @Get(':id')
-  @ApiOperation({ summary: 'Get user by ID' })
-  @ApiResponse({ status: 200, description: 'User found' })
-  @ApiResponse({ status: 404, description: 'User not found' })
-  async getUser(@Param('id') id: string) {
-    return this.usersService.findById(id);
+  @Post('invite')
+  @Roles('ADMIN')
+  invite(@Body() dto: InviteUserDto, @CurrentUser() user: CurrentUserData) {
+    return this.usersService.invite(user.organizationId, user.id, dto);
   }
 
-  @Post()
-  @ApiOperation({ summary: 'Invite new user to organization' })
-  @ApiResponse({ status: 201, description: 'User invited' })
-  @ApiResponse({ status: 409, description: 'User already exists' })
-  async createUser(
-    @CurrentUser() currentUser: CurrentUserPayload,
-    @Body() body: { email: string; name?: string; role?: 'ADMIN' | 'MEMBER' | 'VIEWER' },
-  ) {
-    return this.usersService.create({
-      organizationId: currentUser.organizationId,
-      email: body.email,
-      name: body.name,
-      role: body.role || 'MEMBER',
-    });
+  @Post('accept-invite/:token')
+  acceptInvite(@Param('token') token: string, @Body() dto: AcceptInviteDto) {
+    return this.usersService.acceptInvite(token, dto);
   }
 
-  @Patch(':id')
-  @ApiOperation({ summary: 'Update user' })
-  @ApiResponse({ status: 200, description: 'User updated' })
-  @ApiResponse({ status: 404, description: 'User not found' })
-  async updateUser(
-    @CurrentUser() currentUser: CurrentUserPayload,
+  @Patch(':id/role')
+  @Roles('ADMIN')
+  updateRole(
     @Param('id') id: string,
-    @Body() body: { name?: string; role?: 'ADMIN' | 'MEMBER' | 'VIEWER' },
+    @Body() dto: UpdateRoleDto,
+    @CurrentUser() user: CurrentUserData,
   ) {
-    return this.usersService.update(id, currentUser.organizationId, body);
+    return this.usersService.updateRole(id, user.organizationId, dto.role, user.id);
   }
 
   @Delete(':id')
-  @ApiOperation({ summary: 'Remove user from organization' })
-  @ApiResponse({ status: 200, description: 'User removed' })
-  @ApiResponse({ status: 404, description: 'User not found' })
-  async deleteUser(
-    @CurrentUser() currentUser: CurrentUserPayload,
-    @Param('id') id: string,
-  ) {
-    return this.usersService.delete(id, currentUser.organizationId);
+  @Roles('ADMIN')
+  remove(@Param('id') id: string, @CurrentUser() user: CurrentUserData) {
+    return this.usersService.remove(id, user.organizationId, user.id);
+  }
+
+  @Get('invitations')
+  @Roles('ADMIN')
+  getPendingInvitations(@CurrentUser() user: CurrentUserData) {
+    return this.usersService.getPendingInvitations(user.organizationId);
   }
 }

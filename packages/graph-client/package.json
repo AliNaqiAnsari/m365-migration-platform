@@ -1,0 +1,21 @@
+{
+  "name": "@m365-migration/graph-client",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@azure/identity": "^4.5.0",
+    "@azure/msal-node": "^2.16.0",
+    "ioredis": "^5.4.0",
+    "pino": "^9.5.0"
+  },
+  "devDependencies": {
+    "@m365-migration/types": "workspace:*",
+    "typescript": "^5.4.0"
+  }
+}

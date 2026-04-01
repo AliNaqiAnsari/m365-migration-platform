@@ -1,250 +1,138 @@
-// ============================================================================
-// Migration Types
-// ============================================================================
+// Migration workload types and task definitions
 
-import type { UUID, Timestamps, Workload } from './common';
+export type WorkloadType =
+  | 'EXCHANGE'
+  | 'ONEDRIVE'
+  | 'SHAREPOINT'
+  | 'TEAMS'
+  | 'GROUPS'
+  | 'PLANNER'
+  | 'ENTRA_ID';
 
-export type MigrationJobType = 'full' | 'incremental' | 'selective' | 'cutover' | 'staged' | 'pilot';
-export type MigrationStatus =
-  | 'draft'
-  | 'pending'
-  | 'validating'
-  | 'ready'
-  | 'running'
-  | 'paused'
-  | 'completed'
-  | 'failed'
-  | 'cancelled';
+export type MigrationPhaseType =
+  | 'CREATED'
+  | 'DISCOVERY'
+  | 'MAPPING'
+  | 'PRE_MIGRATION'
+  | 'MIGRATION'
+  | 'VALIDATION'
+  | 'CUTOVER'
+  | 'COMPLETED';
 
-export type MigrationTaskType =
-  | 'user'
+export type TaskType =
+  // Exchange
   | 'mailbox'
   | 'calendar'
   | 'contacts'
-  | 'onedrive'
+  | 'mail_rules'
+  | 'shared_mailbox'
+  // OneDrive
+  | 'user_drive'
+  // SharePoint
   | 'site'
+  | 'document_library'
+  | 'list'
+  | 'site_permissions'
+  // Teams
   | 'team'
   | 'channel'
-  | 'planner'
-  | 'group';
+  | 'channel_messages'
+  | 'channel_files'
+  | 'team_settings'
+  // Groups
+  | 'group'
+  | 'security_group'
+  | 'distribution_list'
+  // Planner
+  | 'plan'
+  | 'bucket'
+  | 'planner_task'
+  // Entra ID
+  | 'user_sync'
+  | 'license_mapping';
 
-export type MigrationTaskStatus =
-  | 'pending'
-  | 'queued'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'skipped'
-  | 'cancelled';
+// Workload dependency order (what must complete before what starts)
+export const WORKLOAD_DEPENDENCIES: Record<WorkloadType, WorkloadType[]> = {
+  ENTRA_ID: [],
+  GROUPS: ['ENTRA_ID'],
+  EXCHANGE: ['ENTRA_ID'],
+  ONEDRIVE: ['ENTRA_ID'],
+  SHAREPOINT: ['GROUPS'],
+  TEAMS: ['GROUPS'],
+  PLANNER: ['GROUPS'],
+};
 
-export interface MigrationJob extends Timestamps {
-  id: UUID;
-  organizationId: UUID;
-  sourceTenantId: UUID;
-  destinationTenantId: UUID;
+// Checkpoint types for resume capability
+export interface CheckpointData {
+  type: 'delta_token' | 'page_cursor' | 'folder_position' | 'upload_session' | 'item_offset';
+  key: string;
+  value: string;
+  itemsProcessed: number;
+  bytesProcessed: number;
+  updatedAt: string;
+}
 
-  name: string;
-  description?: string;
-  jobType: MigrationJobType;
-  workloads: Workload[];
+// Discovery result for a single object
+export interface DiscoveredObject {
+  objectType: string;
+  objectId: string;
+  displayName: string;
+  identifier?: string;
+  sizeBytes: number;
+  itemCount: number;
+  properties: Record<string, unknown>;
+}
 
-  // Migration scope
-  scope: MigrationScope;
-  options: MigrationOptions;
+// Discovery summary
+export interface DiscoverySummary {
+  tenantId: string;
+  tenantDomain: string;
+  discoveredAt: string;
+  totals: {
+    users: number;
+    groups: number;
+    mailboxes: number;
+    sites: number;
+    teams: number;
+    drives: number;
+    plans: number;
+    totalSizeBytes: number;
+  };
+  objects: DiscoveredObject[];
+}
 
-  // Status tracking
-  status: MigrationStatus;
-  progress: number; // 0-100
+// Migration report
+export interface MigrationReport {
+  jobId: string;
+  jobName: string;
+  status: string;
+  startedAt: string;
+  completedAt?: string;
+  duration?: string;
+  workloads: WorkloadReport[];
+  errors: ErrorSummary;
+  deadLetterCount: number;
+}
 
-  // Timing
-  scheduledAt?: Date;
-  startedAt?: Date;
-  completedAt?: Date;
-
-  // Statistics
+export interface WorkloadReport {
+  workload: WorkloadType;
+  status: string;
   totalItems: number;
   processedItems: number;
-  successfulItems: number;
   failedItems: number;
   skippedItems: number;
   totalBytes: number;
-  transferredBytes: number;
-
-  // Error tracking
-  errorCount: number;
-  lastError?: string;
-
-  // Payment
-  paymentStatus?: 'pending' | 'paid' | 'failed';
-  stripePaymentId?: string;
-
-  createdById: UUID;
+  processedBytes: number;
+  duration?: string;
 }
 
-export interface MigrationScope {
-  // User selection
-  users?: string[]; // User IDs
-  groups?: string[]; // Group IDs
-  allUsers?: boolean;
-
-  // SharePoint selection
-  sites?: string[]; // Site IDs
-  allSites?: boolean;
-
-  // Teams selection
-  teams?: string[]; // Team IDs
-  allTeams?: boolean;
-
-  // Filters
-  filters?: MigrationFilters;
-}
-
-export interface MigrationFilters {
-  // Date range filter
-  dateFrom?: Date;
-  dateTo?: Date;
-
-  // Size filter (in bytes)
-  maxItemSize?: number;
-
-  // Content type filters
-  includeAttachments?: boolean;
-  includeArchive?: boolean;
-  includeSharedItems?: boolean;
-
-  // Exclusions
-  excludeFolders?: string[];
-  excludeFileTypes?: string[];
-}
-
-export interface MigrationOptions {
-  // General options
-  preserveTimestamps: boolean;
-  preservePermissions: boolean;
-  preserveVersionHistory: boolean;
-  skipExistingItems: boolean;
-
-  // Conflict handling
-  conflictResolution: 'skip' | 'overwrite' | 'rename' | 'keepBoth';
-
-  // Performance
-  batchSize: number;
-  concurrentTasks: number;
-  throttleRequests: boolean;
-
-  // Notifications
-  notifyOnComplete: boolean;
-  notifyOnError: boolean;
-  webhookUrl?: string;
-
-  // Advanced
-  dryRun: boolean;
-  enableLogging: boolean;
-  retryFailedItems: boolean;
-  maxRetries: number;
-}
-
-export interface MigrationTask extends Timestamps {
-  id: UUID;
-  jobId: UUID;
-  organizationId: UUID;
-
-  taskType: MigrationTaskType;
-  workload: Workload;
-
-  // Source info
-  sourceId: string;
-  sourceName?: string;
-  sourcePath?: string;
-
-  // Destination info
-  destinationId?: string;
-  destinationPath?: string;
-
-  // Status
-  status: MigrationTaskStatus;
-  progress: number;
-
-  // Item counts
-  totalItems: number;
-  processedItems: number;
-  failedItems: number;
-
-  // Size tracking
-  totalBytes: number;
-  transferredBytes: number;
-
-  // Timing
-  startedAt?: Date;
-  completedAt?: Date;
-
-  // Delta tracking
-  lastDeltaToken?: string;
-  lastSyncAt?: Date;
-
-  // Errors
-  errorMessage?: string;
-  errorDetails?: Record<string, unknown>;
-
-  metadata?: Record<string, unknown>;
-}
-
-export interface MigrationItemError {
-  id: UUID;
-  taskId: UUID;
-  jobId: UUID;
-  itemId: string;
-  itemName?: string;
-  itemType: string;
-  errorCode: string;
-  errorMessage: string;
-  errorDetails?: Record<string, unknown>;
-  retryCount: number;
-  canRetry: boolean;
-  timestamp: Date;
-}
-
-export interface CreateMigrationJobRequest {
-  name: string;
-  description?: string;
-  sourceTenantId: UUID;
-  destinationTenantId: UUID;
-  jobType: MigrationJobType;
-  workloads: Workload[];
-  scope: MigrationScope;
-  options?: Partial<MigrationOptions>;
-  scheduledAt?: Date;
-}
-
-export interface MigrationProgress {
-  jobId: UUID;
-  status: MigrationStatus;
-  progress: number;
-  processedItems: number;
-  totalItems: number;
-  transferredBytes: number;
-  totalBytes: number;
-  currentTask?: string;
-  estimatedTimeRemaining?: number; // in seconds
-  speed?: number; // bytes per second
-}
-
-export interface MigrationReport {
-  job: MigrationJob;
-  tasks: MigrationTask[];
-  errors: MigrationItemError[];
-  summary: {
-    totalUsers: number;
-    migratedUsers: number;
-    totalMailboxes: number;
-    migratedMailboxes: number;
-    totalSites: number;
-    migratedSites: number;
-    totalTeams: number;
-    migratedTeams: number;
-    totalDataMigrated: number;
-    duration: number; // in seconds
-    averageSpeed: number; // bytes per second
-  };
-  generatedAt: Date;
+export interface ErrorSummary {
+  total: number;
+  byCategory: Record<string, number>;
+  byWorkload: Record<string, number>;
+  topErrors: Array<{
+    code: string;
+    message: string;
+    count: number;
+  }>;
 }

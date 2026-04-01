@@ -1,70 +1,60 @@
-# Build stage
-FROM node:20-alpine AS builder
+# ============================================================
+# M365 Migration Worker — Production Docker Image
+# Handles all migration workload processing
+# ============================================================
 
+# Stage 1: Install dependencies
+FROM node:20-alpine AS deps
+RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 WORKDIR /app
-
-# Install pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
-
-# Copy workspace configuration
-COPY pnpm-workspace.yaml ./
-COPY package.json pnpm-lock.yaml* ./
-COPY turbo.json ./
-
-# Copy packages
-COPY packages/types/package.json ./packages/types/
-COPY packages/utils/package.json ./packages/utils/
-COPY packages/database/package.json ./packages/database/
-
-# Copy worker app
-COPY apps/worker/package.json ./apps/worker/
-
-# Install dependencies
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .npmrc ./
+COPY packages/database/package.json packages/database/
+COPY packages/types/package.json packages/types/
+COPY packages/graph-client/package.json packages/graph-client/
+COPY apps/worker/package.json apps/worker/
 RUN pnpm install --frozen-lockfile
 
-# Copy source code
-COPY packages/types ./packages/types
-COPY packages/utils ./packages/utils
-COPY packages/database ./packages/database
-COPY apps/worker ./apps/worker
+# Stage 2: Build
+FROM node:20-alpine AS builder
+RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/packages/database/node_modules ./packages/database/node_modules
+COPY --from=deps /app/packages/types/node_modules ./packages/types/node_modules
+COPY --from=deps /app/packages/graph-client/node_modules ./packages/graph-client/node_modules
+COPY --from=deps /app/apps/worker/node_modules ./apps/worker/node_modules
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .npmrc turbo.json tsconfig.json ./
+COPY packages/ packages/
+COPY apps/worker/ apps/worker/
 
-# Build packages and worker
-RUN pnpm --filter @m365-migration/types build
-RUN pnpm --filter @m365-migration/utils build
-RUN pnpm --filter @m365-migration/database generate
-RUN pnpm --filter @m365-migration/worker build
+# Generate Prisma client and build
+RUN cd packages/database && npx prisma generate
+RUN cd apps/worker && npx tsc
 
-# Production stage
+# Stage 3: Production image
 FROM node:20-alpine AS production
-
+RUN apk add --no-cache dumb-init
 WORKDIR /app
 
-# Install pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN addgroup -g 1001 -S appgroup && adduser -S appuser -u 1001 -G appgroup
 
-# Copy built files
-COPY --from=builder /app/packages/types/dist ./packages/types/dist
-COPY --from=builder /app/packages/types/package.json ./packages/types/
-COPY --from=builder /app/packages/utils/dist ./packages/utils/dist
-COPY --from=builder /app/packages/utils/package.json ./packages/utils/
-COPY --from=builder /app/packages/database ./packages/database
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/apps/worker/node_modules ./apps/worker/node_modules
 COPY --from=builder /app/apps/worker/dist ./apps/worker/dist
-COPY --from=builder /app/apps/worker/package.json ./apps/worker/
+COPY --from=builder /app/packages/database/prisma ./packages/database/prisma
 
-# Copy workspace files for production install
-COPY pnpm-workspace.yaml ./
-COPY package.json pnpm-lock.yaml* ./
+COPY --from=deps /app/packages/database/node_modules ./packages/database/node_modules
+COPY packages/database/package.json packages/database/
+RUN cd packages/database && npx prisma generate
 
-# Install production dependencies only
+USER appuser
+
 ENV NODE_ENV=production
-RUN pnpm install --prod --frozen-lockfile
+ENV HEALTH_PORT=8080
+EXPOSE 8080
 
-# Set working directory to worker app
-WORKDIR /app/apps/worker
+ENTRYPOINT ["dumb-init", "--"]
+CMD ["node", "apps/worker/dist/main.js"]
 
-# Run as non-root user
-RUN addgroup -g 1001 -S nodejs
-RUN adduser -S worker -u 1001
-USER worker
-
-CMD ["node", "dist/main.js"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health/live || exit 1

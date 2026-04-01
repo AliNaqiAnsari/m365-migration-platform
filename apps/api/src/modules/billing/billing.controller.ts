@@ -1,111 +1,79 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Body,
-  Headers,
-  RawBodyRequest,
-  Req,
-  UseGuards,
-} from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { ConfigService } from '@nestjs/config';
-import { Request } from 'express';
-import Stripe from 'stripe';
-
+import { Controller, Get, Post, Body, Headers, Req, UseGuards, RawBodyRequest } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { BillingService } from './billing.service';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { Public } from '../../common/decorators/public.decorator';
-import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current-user.decorator';
+import { AuthGuard } from '../../common/guards/auth.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
+import { Roles } from '../../common/decorators/roles.decorator';
+import { CurrentUser, type CurrentUserData } from '../../common/decorators/current-user.decorator';
+import { IsString, IsOptional, IsArray } from 'class-validator';
 
-@ApiTags('billing')
-@Controller({ path: 'billing', version: '1' })
+class CreateCheckoutDto {
+  @IsString()
+  plan: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  workloadAddons?: string[];
+
+  @IsString()
+  successUrl: string;
+
+  @IsString()
+  cancelUrl: string;
+}
+
+class CustomerPortalDto {
+  @IsString()
+  returnUrl: string;
+}
+
+@Controller('billing')
 export class BillingController {
-  constructor(
-    private readonly billingService: BillingService,
-    private readonly configService: ConfigService,
-  ) {}
+  constructor(private billingService: BillingService) {}
 
-  @Get()
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get billing information' })
-  async getBillingInfo(@CurrentUser() user: CurrentUserPayload) {
-    return this.billingService.getBillingInfo(user.organizationId);
+  @Post('create-checkout')
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles('ADMIN')
+  createCheckout(@Body() dto: CreateCheckoutDto, @CurrentUser() user: CurrentUserData) {
+    return this.billingService.createCheckoutSession(user.organizationId, dto);
   }
 
-  @Post('calculate')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Calculate migration cost' })
-  async calculateCost(
-    @Body() body: { workloads: string[]; userCount: number; siteCount?: number },
-  ) {
-    return this.billingService.calculateMigrationCost(body);
+  @Post('customer-portal')
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles('ADMIN')
+  customerPortal(@Body() dto: CustomerPortalDto, @CurrentUser() user: CurrentUserData) {
+    return this.billingService.createCustomerPortalSession(user.organizationId, dto.returnUrl);
   }
 
-  @Post('checkout/migration')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Create checkout session for migration' })
-  async createMigrationCheckout(
-    @CurrentUser() user: CurrentUserPayload,
-    @Body() body: {
-      jobId: string;
-      workloads: string[];
-      userCount: number;
-      siteCount?: number;
-      successUrl: string;
-      cancelUrl: string;
-    },
-  ) {
-    const estimate = this.billingService.calculateMigrationCost({
-      workloads: body.workloads,
-      userCount: body.userCount,
-      siteCount: body.siteCount,
-    });
-
-    return this.billingService.createMigrationCheckout(
-      user.organizationId,
-      body.jobId,
-      estimate,
-      body.successUrl,
-      body.cancelUrl,
-    );
+  @Get('subscription')
+  @UseGuards(AuthGuard)
+  getSubscription(@CurrentUser() user: CurrentUserData) {
+    return this.billingService.getSubscription(user.organizationId);
   }
 
-  @Public()
+  @Get('usage')
+  @UseGuards(AuthGuard)
+  getUsage(@CurrentUser() user: CurrentUserData) {
+    return this.billingService.getUsage(user.organizationId);
+  }
+
+  @Get('invoices')
+  @UseGuards(AuthGuard)
+  getInvoices(@CurrentUser() user: CurrentUserData) {
+    return this.billingService.getInvoices(user.organizationId);
+  }
+
   @Post('webhook')
-  @ApiOperation({ summary: 'Stripe webhook endpoint' })
-  async handleWebhook(
+  @SkipThrottle()
+  async webhook(
     @Req() req: RawBodyRequest<Request>,
     @Headers('stripe-signature') signature: string,
   ) {
-    const webhookSecret = this.configService.get<string>('stripe.webhookSecret');
-
-    if (!webhookSecret) {
-      return { received: true };
+    const rawBody = req.rawBody;
+    if (!rawBody) {
+      return { error: 'Raw body not available' };
     }
-
-    const stripe = new Stripe(this.configService.get('stripe.secretKey')!, {
-      apiVersion: '2024-12-18.acacia',
-    });
-
-    let event: Stripe.Event;
-
-    try {
-      event = stripe.webhooks.constructEvent(
-        req.rawBody!,
-        signature,
-        webhookSecret,
-      );
-    } catch (err) {
-      console.error('Webhook signature verification failed:', err);
-      return { error: 'Webhook signature verification failed' };
-    }
-
-    await this.billingService.handleWebhook(event);
-
-    return { received: true };
+    return this.billingService.handleWebhook(rawBody, signature);
   }
 }

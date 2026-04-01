@@ -1,53 +1,65 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { PrismaService } from '../../prisma/prisma.service';
+import { Injectable, Inject, NotFoundException } from '@nestjs/common';
+import type { PrismaClient } from '@m365-migration/database';
+import { PLAN_LIMITS, type PlanTier } from '@m365-migration/types';
 
 @Injectable()
 export class OrganizationsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(@Inject('PRISMA') private prisma: PrismaClient) {}
 
-  async findById(id: string) {
+  async getCurrent(organizationId: string) {
     const org = await this.prisma.organization.findUnique({
-      where: { id },
+      where: { id: organizationId },
+      include: {
+        _count: {
+          select: { users: true, tenants: true, migrationJobs: true },
+        },
+        subscription: {
+          select: {
+            plan: true,
+            status: true,
+            workloadAddons: true,
+            currentPeriodEnd: true,
+            cancelAtPeriodEnd: true,
+          },
+        },
+      },
     });
 
-    if (!org) {
-      throw new NotFoundException('Organization not found');
-    }
+    if (!org) throw new NotFoundException('Organization not found');
 
-    return org;
-  }
-
-  async update(id: string, data: { name?: string; billingEmail?: string; settings?: Record<string, unknown> }) {
-    return this.prisma.organization.update({
-      where: { id },
-      data,
-    });
-  }
-
-  async getStats(id: string) {
-    const [userCount, tenantCount, migrationStats] = await Promise.all([
-      this.prisma.user.count({ where: { organizationId: id } }),
-      this.prisma.tenant.count({ where: { organizationId: id } }),
-      this.prisma.migrationJob.groupBy({
-        by: ['status'],
-        where: { organizationId: id },
-        _count: { id: true },
-      }),
-    ]);
-
-    const activeMigrations = migrationStats
-      .filter((s) => ['RUNNING', 'PAUSED'].includes(s.status))
-      .reduce((acc, s) => acc + s._count.id, 0);
-
-    const completedMigrations = migrationStats
-      .filter((s) => s.status === 'COMPLETED')
-      .reduce((acc, s) => acc + s._count.id, 0);
+    const plan = org.plan as PlanTier;
+    const limits = PLAN_LIMITS[plan];
 
     return {
-      userCount,
-      tenantCount,
-      activeMigrations,
-      completedMigrations,
+      id: org.id,
+      name: org.name,
+      slug: org.slug,
+      billingEmail: org.billingEmail,
+      plan: org.plan,
+      limits,
+      subscription: org.subscription,
+      counts: org._count,
+      createdAt: org.createdAt.toISOString(),
     };
+  }
+
+  async update(organizationId: string, data: { name?: string; billingEmail?: string }) {
+    const org = await this.prisma.organization.findUnique({ where: { id: organizationId } });
+    if (!org) throw new NotFoundException('Organization not found');
+
+    return this.prisma.organization.update({
+      where: { id: organizationId },
+      data: {
+        name: data.name ?? org.name,
+        billingEmail: data.billingEmail ?? org.billingEmail,
+      },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        billingEmail: true,
+        plan: true,
+      },
+    });
   }
 }

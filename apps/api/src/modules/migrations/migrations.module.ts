@@ -1,25 +1,15 @@
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
-import { MigrationsService } from './migrations.service';
 import { MigrationsController } from './migrations.controller';
-import { MigrationsGateway } from './migrations.gateway';
-import { TenantsModule } from '../tenants/tenants.module';
-import { GraphModule } from '../graph/graph.module';
+import { MigrationsSseController } from './migrations.sse.controller';
+import { MigrationsService } from './migrations.service';
 
 @Module({
   imports: [
-    TenantsModule,
-    GraphModule,
-    BullModule.registerQueue(
-      { name: 'migration-queue' },
-      { name: 'exchange-migration' },
-      { name: 'sharepoint-migration' },
-      { name: 'onedrive-migration' },
-      { name: 'teams-migration' },
-    ),
+    BullModule.registerQueue({ name: 'orchestrator' }),
   ],
-  controllers: [MigrationsController],
-  providers: [MigrationsService, MigrationsGateway],
+  controllers: [MigrationsController, MigrationsSseController],
+  providers: [MigrationsService],
   exports: [MigrationsService],
 })
 export class MigrationsModule {}

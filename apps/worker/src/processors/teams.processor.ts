@@ -1,445 +1,235 @@
 import { Job } from 'bullmq';
-import { BaseProcessor, MigrationJobData, ProcessorResult } from './base.processor';
+import { BaseProcessor } from './base.processor';
+import type { MigrationTaskPayload } from '@m365-migration/types';
+import type { GraphClient } from '@m365-migration/graph-client';
 
-interface Team {
-  id: string;
-  displayName: string;
-  description: string;
-  visibility: string;
-}
+export class TeamsProcessor extends BaseProcessor<MigrationTaskPayload> {
+  readonly queueName = 'teams';
+  readonly concurrency = 6;
 
-interface Channel {
-  id: string;
-  displayName: string;
-  description: string;
-  membershipType: string;
-}
+  async process(job: Job<MigrationTaskPayload>): Promise<void> {
+    const { taskId, jobId, sourceTenantId, destTenantId, sourceObjectId, destObjectId } = job.data;
 
-export class TeamsProcessor extends BaseProcessor {
-  async process(job: Job<MigrationJobData>): Promise<ProcessorResult> {
-    const { sourceTenantId, destinationTenantId, sourceId, taskId } = job.data;
+    if (!destObjectId) {
+      await this.updateTaskProgress(taskId, { status: 'FAILED' });
+      return;
+    }
 
-    this.logger.info({ taskId, sourceId }, 'Starting Teams migration');
+    await this.updateTaskProgress(taskId, { status: 'IN_PROGRESS' });
 
-    const result: ProcessorResult = {
-      success: true,
-      itemsProcessed: 0,
-      itemsFailed: 0,
-      bytesTransferred: 0,
-      errors: [],
-    };
+    const sourceGraph = await this.createGraphClient(sourceTenantId);
+    const destGraph = await this.createGraphClient(destTenantId);
 
     try {
-      const sourceClient = await this.getGraphClient(sourceTenantId);
-      const destClient = await this.getGraphClient(destinationTenantId);
+      await this.migrateTeam(jobId, taskId, sourceGraph, destGraph, sourceObjectId, destObjectId);
+      await this.updateTaskProgress(taskId, { status: 'COMPLETED', progressPercent: 100 });
+    } catch (error) {
+      this.logger.error({ taskId, error }, 'Teams migration failed');
+      await this.updateTaskProgress(taskId, { status: 'FAILED' });
+      throw error;
+    }
 
-      // Get the team from source
-      const sourceTeam = await this.getTeam(sourceClient, sourceId);
-      this.logger.info({ team: sourceTeam.displayName }, 'Found source team');
+    await this.updateJobProgress(jobId);
+  }
 
-      // Create team in destination
-      const destTeam = await this.createOrGetTeam(destClient, sourceTeam);
-      this.logger.info({ team: destTeam.displayName, id: destTeam.id }, 'Destination team ready');
+  private async migrateTeam(
+    jobId: string, taskId: string,
+    source: GraphClient, dest: GraphClient,
+    sourceTeamId: string, destTeamId: string,
+  ): Promise<void> {
+    this.logger.info({ taskId, sourceTeamId, destTeamId }, 'Migrating Teams data');
 
-      // Get channels
-      const channels = await this.getChannels(sourceClient, sourceId);
-      this.logger.info({ channelCount: channels.length }, 'Found channels');
+    // Get source channels
+    const sourceChannels = await source.request<{ value: any[] }>(
+      `/teams/${sourceTeamId}/channels?$select=id,displayName,description,membershipType`,
+    );
 
-      // Migrate each channel
-      for (let i = 0; i < channels.length; i++) {
-        const channel = channels[i];
+    for (const channel of sourceChannels.value) {
+      this.logger.info({ taskId, channel: channel.displayName }, 'Migrating channel');
 
+      let destChannelId: string;
+
+      if (channel.displayName === 'General') {
+        // General channel always exists
+        const destChannels = await dest.request<{ value: any[] }>(
+          `/teams/${destTeamId}/channels?$filter=displayName eq 'General'&$select=id`,
+        );
+        destChannelId = destChannels.value[0]?.id;
+        if (!destChannelId) continue;
+      } else {
+        // Create channel in destination
         try {
-          // Create channel in destination
-          const destChannel = await this.createOrGetChannel(destClient, destTeam.id, channel);
-
-          // Migrate messages (using Teams export API or Migration Mode)
-          const messagesResult = await this.migrateChannelMessages(
-            sourceClient,
-            destClient,
-            sourceId,
-            destTeam.id,
-            channel.id,
-            destChannel.id,
-            job,
-          );
-
-          result.itemsProcessed += messagesResult.processed;
-          result.itemsFailed += messagesResult.failed;
-
-          // Migrate channel files
-          const filesResult = await this.migrateChannelFiles(
-            sourceClient,
-            destClient,
-            sourceId,
-            destTeam.id,
-            channel.id,
-            destChannel.id,
-            job,
-          );
-
-          result.itemsProcessed += filesResult.processed;
-          result.itemsFailed += filesResult.failed;
-          result.bytesTransferred += filesResult.bytesTransferred;
-
-          // Update progress
-          const progress = Math.round(((i + 1) / channels.length) * 100);
-          await job.updateProgress(progress);
-
-        } catch (error: any) {
-          this.logger.error({ channel: channel.displayName, error: error.message }, 'Failed to migrate channel');
-          result.errors.push(`Failed to migrate channel ${channel.displayName}: ${error.message}`);
+          const created = await dest.request<any>(`/teams/${destTeamId}/channels`, {
+            method: 'POST',
+            body: {
+              displayName: channel.displayName,
+              description: channel.description,
+              membershipType: channel.membershipType ?? 'standard',
+            },
+          });
+          destChannelId = created.id;
+        } catch (error) {
+          await this.logError(taskId, {
+            itemId: channel.id,
+            itemName: channel.displayName,
+            itemType: 'channel',
+            errorCode: 'CREATE_CHANNEL_FAILED',
+            errorMessage: String(error),
+            retryable: true,
+          });
+          continue;
         }
       }
 
-      // Migrate team members
-      const membersResult = await this.migrateTeamMembers(sourceClient, destClient, sourceId, destTeam.id);
-      result.itemsProcessed += membersResult.processed;
-      result.itemsFailed += membersResult.failed;
-
-      // Migrate Planner tasks if associated
-      const plannerResult = await this.migratePlanner(sourceClient, destClient, sourceId, destTeam.id);
-      result.itemsProcessed += plannerResult.processed;
-      result.itemsFailed += plannerResult.failed;
-
-      result.success = result.itemsFailed === 0;
-
-    } catch (error: any) {
-      this.logger.error({ taskId, error: error.message }, 'Teams migration failed');
-      result.success = false;
-      result.errors.push(error.message);
+      // Migrate channel messages using Teams Migration Mode
+      // Note: Requires Teamwork.Migrate.All permission
+      await this.migrateChannelMessages(
+        taskId, source, dest,
+        sourceTeamId, channel.id,
+        destTeamId, destChannelId,
+        jobId,
+      );
     }
 
-    return result;
-  }
-
-  private async getTeam(client: any, teamId: string): Promise<Team> {
-    return this.retryWithBackoff(async () => {
-      return client.api(`/teams/${teamId}`).get();
-    });
-  }
-
-  private async createOrGetTeam(client: any, sourceTeam: Team): Promise<Team> {
-    // Check if team with same name exists
-    const existingTeams = await this.retryWithBackoff(async () => {
-      return client
-        .api('/groups')
-        .filter(`displayName eq '${sourceTeam.displayName}' and resourceProvisioningOptions/any(x:x eq 'Team')`)
-        .get();
-    });
-
-    if (existingTeams.value.length > 0) {
-      const groupId = existingTeams.value[0].id;
-      return this.retryWithBackoff(async () => {
-        return client.api(`/teams/${groupId}`).get();
-      });
-    }
-
-    // Create new team
-    const newTeam = await this.retryWithBackoff(async () => {
-      return client.api('/teams').post({
-        'template@odata.bind': "https://graph.microsoft.com/v1.0/teamsTemplates('standard')",
-        displayName: sourceTeam.displayName,
-        description: sourceTeam.description,
-        visibility: sourceTeam.visibility,
-      });
-    });
-
-    // Wait for team provisioning
-    await this.delay(10000);
-
-    return newTeam;
-  }
-
-  private async getChannels(client: any, teamId: string): Promise<Channel[]> {
-    const response = await this.retryWithBackoff(async () => {
-      return client.api(`/teams/${teamId}/channels`).get();
-    });
-    return response.value;
-  }
-
-  private async createOrGetChannel(client: any, teamId: string, sourceChannel: Channel): Promise<Channel> {
-    // Skip the "General" channel as it's created automatically
-    if (sourceChannel.displayName === 'General') {
-      const channels = await this.retryWithBackoff(async () => {
-        return client.api(`/teams/${teamId}/channels`).get();
-      });
-      return channels.value.find((c: Channel) => c.displayName === 'General');
-    }
-
-    // Check if channel exists
-    const existingChannels = await this.retryWithBackoff(async () => {
-      return client.api(`/teams/${teamId}/channels`).get();
-    });
-
-    const existing = existingChannels.value.find((c: Channel) => c.displayName === sourceChannel.displayName);
-    if (existing) {
-      return existing;
-    }
-
-    // Create new channel
-    return this.retryWithBackoff(async () => {
-      return client.api(`/teams/${teamId}/channels`).post({
-        displayName: sourceChannel.displayName,
-        description: sourceChannel.description,
-        membershipType: sourceChannel.membershipType || 'standard',
-      });
-    });
+    // Migrate team members
+    await this.migrateTeamMembers(jobId, taskId, source, dest, sourceTeamId, destTeamId);
   }
 
   private async migrateChannelMessages(
-    sourceClient: any,
-    destClient: any,
-    sourceTeamId: string,
-    destTeamId: string,
-    sourceChannelId: string,
-    destChannelId: string,
-    job: Job<MigrationJobData>,
-  ): Promise<{ processed: number; failed: number }> {
-    let processed = 0;
-    let failed = 0;
+    taskId: string,
+    source: GraphClient, dest: GraphClient,
+    sourceTeamId: string, sourceChannelId: string,
+    destTeamId: string, destChannelId: string,
+    jobId: string,
+  ): Promise<void> {
+    try {
+      for await (const messages of source.paginate<any>(
+        `/teams/${sourceTeamId}/channels/${sourceChannelId}/messages?$top=50`,
+      )) {
+        for (const msg of messages) {
+          if (msg.messageType !== 'message') continue; // Skip system messages
 
-    this.logger.info({ sourceChannelId }, 'Migrating channel messages');
+          try {
+            // Resolve the sender to destination user
+            const destUserId = msg.from?.user?.id
+              ? await this.resolveMapping(jobId, 'USER', msg.from.user.id)
+              : null;
 
-    // Note: In production, you would use the Teams Migration Mode API
-    // which allows bulk import of historical messages.
-    // This requires special permissions and rate limits.
+            // Use migration mode to preserve original timestamps
+            await dest.request(
+              `/teams/${destTeamId}/channels/${destChannelId}/messages`,
+              {
+                method: 'POST',
+                body: {
+                  createdDateTime: msg.createdDateTime,
+                  from: destUserId
+                    ? { user: { id: destUserId, displayName: msg.from?.user?.displayName } }
+                    : msg.from,
+                  body: msg.body,
+                  importance: msg.importance,
+                  subject: msg.subject,
+                },
+              },
+            );
 
-    let nextLink: string | undefined;
-
-    do {
-      const response = await this.retryWithBackoff(async () => {
-        if (nextLink) {
-          return sourceClient.api(nextLink).get();
-        }
-        return sourceClient
-          .api(`/teams/${sourceTeamId}/channels/${sourceChannelId}/messages`)
-          .top(50)
-          .get();
-      });
-
-      for (const message of response.value) {
-        // Skip system messages
-        if (message.messageType !== 'message') {
-          continue;
-        }
-
-        try {
-          // Note: Regular API doesn't allow setting timestamps
-          // Migration Mode API would be used in production
-          await this.retryWithBackoff(async () => {
-            await destClient.api(`/teams/${destTeamId}/channels/${destChannelId}/messages`).post({
-              body: message.body,
-            });
-          });
-
-          // Migrate replies
-          if (message.replies && message.replies.length > 0) {
-            for (const reply of message.replies) {
-              await this.retryWithBackoff(async () => {
-                await destClient
-                  .api(`/teams/${destTeamId}/channels/${destChannelId}/messages/${message.id}/replies`)
-                  .post({
-                    body: reply.body,
-                  });
-              });
+            // Migrate replies
+            if (msg.id) {
+              await this.migrateReplies(
+                taskId, source, dest,
+                sourceTeamId, sourceChannelId, msg.id,
+                destTeamId, destChannelId, msg.id,
+                jobId,
+              );
             }
+          } catch (error) {
+            await this.logError(taskId, {
+              itemId: msg.id,
+              itemName: msg.body?.content?.substring(0, 100),
+              itemType: 'message',
+              errorCode: 'MSG_MIGRATION_FAILED',
+              errorMessage: String(error),
+              retryable: true,
+            });
           }
-
-          processed++;
-
-          // Rate limiting for Teams API (very strict)
-          await this.delay(1000);
-
-        } catch (error: any) {
-          this.logger.error({ messageId: message.id, error: error.message }, 'Failed to migrate message');
-          failed++;
         }
       }
-
-      nextLink = response['@odata.nextLink'];
-    } while (nextLink);
-
-    return { processed, failed };
+    } catch (error) {
+      this.logger.warn({ taskId, sourceChannelId, error }, 'Failed to migrate channel messages');
+    }
   }
 
-  private async migrateChannelFiles(
-    sourceClient: any,
-    destClient: any,
-    sourceTeamId: string,
-    destTeamId: string,
-    sourceChannelId: string,
-    destChannelId: string,
-    job: Job<MigrationJobData>,
-  ): Promise<{ processed: number; failed: number; bytesTransferred: number }> {
-    let processed = 0;
-    let failed = 0;
-    let bytesTransferred = 0;
-
-    this.logger.info({ sourceChannelId }, 'Migrating channel files');
-
+  private async migrateReplies(
+    taskId: string,
+    source: GraphClient, dest: GraphClient,
+    sourceTeamId: string, sourceChannelId: string, sourceMessageId: string,
+    destTeamId: string, destChannelId: string, destMessageId: string,
+    jobId: string,
+  ): Promise<void> {
     try {
-      // Get source channel's files folder
-      const sourceFolder = await this.retryWithBackoff(async () => {
-        return sourceClient.api(`/teams/${sourceTeamId}/channels/${sourceChannelId}/filesFolder`).get();
-      });
+      for await (const replies of source.paginate<any>(
+        `/teams/${sourceTeamId}/channels/${sourceChannelId}/messages/${sourceMessageId}/replies?$top=50`,
+      )) {
+        for (const reply of replies) {
+          const destUserId = reply.from?.user?.id
+            ? await this.resolveMapping(jobId, 'USER', reply.from.user.id)
+            : null;
 
-      // Get destination channel's files folder
-      const destFolder = await this.retryWithBackoff(async () => {
-        return destClient.api(`/teams/${destTeamId}/channels/${destChannelId}/filesFolder`).get();
-      });
-
-      // Get files from source
-      const response = await this.retryWithBackoff(async () => {
-        return sourceClient
-          .api(`/drives/${sourceFolder.parentReference.driveId}/items/${sourceFolder.id}/children`)
-          .get();
-      });
-
-      for (const item of response.value) {
-        if (item.file) {
           try {
-            // Download file
-            const content = await this.retryWithBackoff(async () => {
-              return sourceClient
-                .api(`/drives/${sourceFolder.parentReference.driveId}/items/${item.id}/content`)
-                .get();
-            });
-
-            // Upload to destination
-            await this.retryWithBackoff(async () => {
-              await destClient
-                .api(`/drives/${destFolder.parentReference.driveId}/items/${destFolder.id}:/${item.name}:/content`)
-                .put(content);
-            });
-
-            processed++;
-            bytesTransferred += item.size || 0;
-
-          } catch (error: any) {
-            this.logger.error({ fileName: item.name, error: error.message }, 'Failed to migrate file');
-            failed++;
+            await dest.request(
+              `/teams/${destTeamId}/channels/${destChannelId}/messages/${destMessageId}/replies`,
+              {
+                method: 'POST',
+                body: {
+                  createdDateTime: reply.createdDateTime,
+                  from: destUserId
+                    ? { user: { id: destUserId, displayName: reply.from?.user?.displayName } }
+                    : reply.from,
+                  body: reply.body,
+                },
+              },
+            );
+          } catch {
+            // Skip failed replies
           }
         }
       }
-
-    } catch (error: any) {
-      this.logger.error({ error: error.message }, 'Failed to migrate channel files');
+    } catch {
+      // Channel may not have replies
     }
-
-    return { processed, failed, bytesTransferred };
   }
 
   private async migrateTeamMembers(
-    sourceClient: any,
-    destClient: any,
-    sourceTeamId: string,
-    destTeamId: string,
-  ): Promise<{ processed: number; failed: number }> {
-    let processed = 0;
-    let failed = 0;
-
-    this.logger.info('Migrating team members');
-
-    const members = await this.retryWithBackoff(async () => {
-      return sourceClient.api(`/teams/${sourceTeamId}/members`).get();
-    });
-
-    for (const member of members.value) {
-      try {
-        await this.retryWithBackoff(async () => {
-          await destClient.api(`/teams/${destTeamId}/members`).post({
-            '@odata.type': '#microsoft.graph.aadUserConversationMember',
-            roles: member.roles,
-            'user@odata.bind': `https://graph.microsoft.com/v1.0/users('${member.userId}')`,
-          });
-        });
-        processed++;
-      } catch (error: any) {
-        // Member might already exist
-        if (!error.message?.includes('already exists')) {
-          this.logger.error({ userId: member.userId, error: error.message }, 'Failed to add member');
-          failed++;
-        }
-      }
-    }
-
-    return { processed, failed };
-  }
-
-  private async migratePlanner(
-    sourceClient: any,
-    destClient: any,
-    sourceTeamId: string,
-    destTeamId: string,
-  ): Promise<{ processed: number; failed: number }> {
-    let processed = 0;
-    let failed = 0;
-
-    this.logger.info('Migrating Planner tasks');
-
+    jobId: string, taskId: string,
+    source: GraphClient, dest: GraphClient,
+    sourceTeamId: string, destTeamId: string,
+  ): Promise<void> {
     try {
-      // Get plans associated with the team's group
-      const plans = await this.retryWithBackoff(async () => {
-        return sourceClient.api(`/groups/${sourceTeamId}/planner/plans`).get();
-      });
+      const members = await source.request<{ value: any[] }>(
+        `/teams/${sourceTeamId}/members?$select=id,displayName,roles,userId`,
+      );
 
-      for (const plan of plans.value) {
+      for (const member of members.value) {
+        const destUserId = member.userId
+          ? await this.resolveMapping(jobId, 'USER', member.userId)
+          : null;
+
+        if (!destUserId) continue;
+
         try {
-          // Create plan in destination
-          const destPlan = await this.retryWithBackoff(async () => {
-            return destClient.api('/planner/plans').post({
-              owner: destTeamId,
-              title: plan.title,
-            });
+          await dest.request(`/teams/${destTeamId}/members`, {
+            method: 'POST',
+            body: {
+              '@odata.type': '#microsoft.graph.aadUserConversationMember',
+              'user@odata.bind': `https://graph.microsoft.com/v1.0/users('${destUserId}')`,
+              roles: member.roles,
+            },
           });
-
-          // Get and create buckets
-          const buckets = await this.retryWithBackoff(async () => {
-            return sourceClient.api(`/planner/plans/${plan.id}/buckets`).get();
-          });
-
-          const bucketMap = new Map();
-          for (const bucket of buckets.value) {
-            const destBucket = await this.retryWithBackoff(async () => {
-              return destClient.api('/planner/buckets').post({
-                name: bucket.name,
-                planId: destPlan.id,
-                orderHint: bucket.orderHint,
-              });
-            });
-            bucketMap.set(bucket.id, destBucket.id);
-          }
-
-          // Get and create tasks
-          const tasks = await this.retryWithBackoff(async () => {
-            return sourceClient.api(`/planner/plans/${plan.id}/tasks`).get();
-          });
-
-          for (const task of tasks.value) {
-            await this.retryWithBackoff(async () => {
-              await destClient.api('/planner/tasks').post({
-                planId: destPlan.id,
-                bucketId: bucketMap.get(task.bucketId),
-                title: task.title,
-                percentComplete: task.percentComplete,
-                dueDateTime: task.dueDateTime,
-                orderHint: task.orderHint,
-              });
-            });
-            processed++;
-          }
-
-        } catch (error: any) {
-          this.logger.error({ planId: plan.id, error: error.message }, 'Failed to migrate plan');
-          failed++;
+        } catch {
+          // Member may already exist
         }
       }
-
-    } catch (error: any) {
-      this.logger.error({ error: error.message }, 'Failed to get Planner plans');
+    } catch (error) {
+      this.logger.warn({ taskId, error }, 'Failed to migrate team members');
     }
-
-    return { processed, failed };
   }
 }

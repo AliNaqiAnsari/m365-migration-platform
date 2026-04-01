@@ -1,136 +1,95 @@
-import 'dotenv/config';
-import { Redis } from 'ioredis';
-import { Worker } from 'bullmq';
+import Redis from 'ioredis';
 import pino from 'pino';
+import { PrismaClient } from '@m365-migration/database';
+import { OrchestratorProcessor } from './processors/orchestrator.processor';
+import { DiscoveryProcessor } from './processors/discovery.processor';
 import { ExchangeProcessor } from './processors/exchange.processor';
-import { SharePointProcessor } from './processors/sharepoint.processor';
 import { OneDriveProcessor } from './processors/onedrive.processor';
+import { SharePointProcessor } from './processors/sharepoint.processor';
 import { TeamsProcessor } from './processors/teams.processor';
-import { BackupProcessor } from './processors/backup.processor';
+import { GroupsProcessor } from './processors/groups.processor';
+import { PlannerProcessor } from './processors/planner.processor';
+import { EntraIdProcessor } from './processors/entra-id.processor';
+import { WebhookProcessor } from './processors/webhook.processor';
+import { startHealthServer } from './health';
 
-const logger = pino({
-  transport: {
-    target: 'pino-pretty',
-    options: {
-      colorize: true,
+const logger = pino({ name: 'worker' });
+
+async function main() {
+  // Redis connection — Azure Cache for Redis requires TLS on port 6380
+  const redisPort = parseInt(process.env.REDIS_PORT ?? '6379', 10);
+  const useTls = process.env.REDIS_TLS === 'true' || redisPort === 6380;
+
+  const redis = new Redis({
+    host: process.env.REDIS_HOST ?? 'localhost',
+    port: redisPort,
+    password: process.env.REDIS_PASSWORD || undefined,
+    tls: useTls ? { rejectUnauthorized: false } : undefined,
+    maxRetriesPerRequest: null,
+    retryStrategy: (times) => Math.min(times * 200, 5000),
+    reconnectOnError: (err) => {
+      logger.warn({ err: err.message }, 'Redis reconnect on error');
+      return true;
     },
-  },
-});
+  });
 
-// Redis connection
-const redisConnection = new Redis({
-  host: process.env.REDIS_HOST || 'localhost',
-  port: parseInt(process.env.REDIS_PORT || '6379', 10),
-  password: process.env.REDIS_PASSWORD || undefined,
-  maxRetriesPerRequest: null,
-});
+  redis.on('connect', () => logger.info('Redis connected'));
+  redis.on('error', (err) => logger.error({ err: err.message }, 'Redis error'));
 
-// Initialize processors
-const exchangeProcessor = new ExchangeProcessor();
-const sharePointProcessor = new SharePointProcessor();
-const oneDriveProcessor = new OneDriveProcessor();
-const teamsProcessor = new TeamsProcessor();
-const backupProcessor = new BackupProcessor();
+  const prisma = new PrismaClient();
 
-// Queue configurations
-const queues = [
-  {
-    name: 'exchange-migration',
-    processor: exchangeProcessor,
-    concurrency: 10,
-  },
-  {
-    name: 'sharepoint-migration',
-    processor: sharePointProcessor,
-    concurrency: 8,
-  },
-  {
-    name: 'onedrive-migration',
-    processor: oneDriveProcessor,
-    concurrency: 12,
-  },
-  {
-    name: 'teams-migration',
-    processor: teamsProcessor,
-    concurrency: 6,
-  },
-  {
-    name: 'backup',
-    processor: backupProcessor,
-    concurrency: 4,
-  },
-];
+  // Start health server for Container Apps probes
+  const healthPort = parseInt(process.env.HEALTH_PORT ?? '8080', 10);
+  const healthServer = startHealthServer(redis, prisma, healthPort);
 
-// Create workers
-const workers: Worker[] = [];
+  const sharedDeps = { redis, prisma, logger };
 
-async function startWorkers() {
-  logger.info('Starting M365 Migration Workers...');
+  // Start all processors
+  const processors = [
+    new OrchestratorProcessor(sharedDeps),
+    new DiscoveryProcessor(sharedDeps),
+    new ExchangeProcessor(sharedDeps),
+    new OneDriveProcessor(sharedDeps),
+    new SharePointProcessor(sharedDeps),
+    new TeamsProcessor(sharedDeps),
+    new GroupsProcessor(sharedDeps),
+    new PlannerProcessor(sharedDeps),
+    new EntraIdProcessor(sharedDeps),
+    new WebhookProcessor(sharedDeps),
+  ];
 
-  for (const queue of queues) {
-    const worker = new Worker(
-      queue.name,
-      async (job) => {
-        logger.info({ jobId: job.id, queue: queue.name }, 'Processing job');
-
-        try {
-          const result = await queue.processor.process(job);
-          logger.info({ jobId: job.id, queue: queue.name }, 'Job completed');
-          return result;
-        } catch (error) {
-          logger.error({ jobId: job.id, queue: queue.name, error }, 'Job failed');
-          throw error;
-        }
-      },
-      {
-        connection: redisConnection,
-        concurrency: queue.concurrency,
-        limiter: {
-          max: 100,
-          duration: 1000,
-        },
-      },
-    );
-
-    worker.on('completed', (job) => {
-      logger.info({ jobId: job.id, queue: queue.name }, 'Job completed successfully');
-    });
-
-    worker.on('failed', (job, err) => {
-      logger.error({ jobId: job?.id, queue: queue.name, error: err.message }, 'Job failed');
-    });
-
-    worker.on('progress', (job, progress) => {
-      logger.debug({ jobId: job.id, queue: queue.name, progress }, 'Job progress');
-    });
-
-    worker.on('error', (err) => {
-      logger.error({ queue: queue.name, error: err.message }, 'Worker error');
-    });
-
-    workers.push(worker);
-    logger.info({ queue: queue.name, concurrency: queue.concurrency }, 'Worker started');
+  for (const processor of processors) {
+    processor.start();
+    logger.info({ queue: processor.queueName }, 'Processor started');
   }
 
-  logger.info(`All ${workers.length} workers started successfully`);
+  logger.info(`Worker started with ${processors.length} processors`);
+
+  // Graceful shutdown — Container Apps sends SIGTERM before killing
+  let shuttingDown = false;
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info({ signal }, 'Graceful shutdown initiated...');
+
+    // Stop accepting new jobs, drain in-flight work
+    const stopPromises = processors.map((p) => p.stop());
+    await Promise.allSettled(stopPromises);
+    logger.info('All processors stopped');
+
+    healthServer.close();
+    await prisma.$disconnect();
+    await redis.quit();
+
+    logger.info('Shutdown complete');
+    process.exit(0);
+  };
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
-async function shutdown() {
-  logger.info('Shutting down workers...');
-
-  await Promise.all(workers.map((worker) => worker.close()));
-  await redisConnection.quit();
-
-  logger.info('Workers shut down gracefully');
-  process.exit(0);
-}
-
-// Handle shutdown signals
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
-
-// Start workers
-startWorkers().catch((err) => {
-  logger.error({ error: err.message }, 'Failed to start workers');
+main().catch((err) => {
+  console.error('Worker failed to start:', err);
   process.exit(1);
 });

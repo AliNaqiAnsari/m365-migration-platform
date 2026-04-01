@@ -1,286 +1,204 @@
 import { Job } from 'bullmq';
-import { BaseProcessor, MigrationJobData, ProcessorResult } from './base.processor';
+import { BaseProcessor } from './base.processor';
+import type { MigrationTaskPayload } from '@m365-migration/types';
+import type { GraphClient } from '@m365-migration/graph-client';
+import { GraphApiError } from '@m365-migration/graph-client';
 
-interface DriveItem {
-  id: string;
-  name: string;
-  size: number;
-  folder?: { childCount: number };
-  file?: { mimeType: string };
-  webUrl: string;
-  lastModifiedDateTime: string;
-}
+const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB chunks for upload
+const SIMPLE_UPLOAD_MAX = 4 * 1024 * 1024; // 4MB threshold
 
-export class OneDriveProcessor extends BaseProcessor {
-  private readonly CHUNK_SIZE = 10 * 1024 * 1024; // 10MB chunks
+export class OneDriveProcessor extends BaseProcessor<MigrationTaskPayload> {
+  readonly queueName = 'onedrive';
+  readonly concurrency = 12;
 
-  async process(job: Job<MigrationJobData>): Promise<ProcessorResult> {
-    const { sourceTenantId, destinationTenantId, sourceId, taskId } = job.data;
+  async process(job: Job<MigrationTaskPayload>): Promise<void> {
+    const { taskId, jobId, sourceTenantId, destTenantId, sourceObjectId, destObjectId } = job.data;
 
-    this.logger.info({ taskId, sourceId }, 'Starting OneDrive migration');
-
-    const result: ProcessorResult = {
-      success: true,
-      itemsProcessed: 0,
-      itemsFailed: 0,
-      bytesTransferred: 0,
-      errors: [],
-    };
-
-    try {
-      const sourceClient = await this.getGraphClient(sourceTenantId);
-      const destClient = await this.getGraphClient(destinationTenantId);
-
-      // Get user's OneDrive
-      const sourceDrive = await this.getUserDrive(sourceClient, sourceId);
-      this.logger.info({ driveId: sourceDrive.id }, 'Found source OneDrive');
-
-      // Get destination user's OneDrive
-      const destDrive = await this.getUserDrive(destClient, sourceId);
-      this.logger.info({ driveId: destDrive.id }, 'Found destination OneDrive');
-
-      // Get total item count for progress tracking
-      const totalItems = await this.getTotalItemCount(sourceClient, sourceDrive.id);
-      this.logger.info({ totalItems }, 'Total items to migrate');
-
-      // Migrate items recursively starting from root
-      const migrationResult = await this.migrateFolder(
-        sourceClient,
-        destClient,
-        sourceDrive.id,
-        destDrive.id,
-        'root',
-        'root',
-        job,
-        totalItems,
-      );
-
-      result.itemsProcessed = migrationResult.processed;
-      result.itemsFailed = migrationResult.failed;
-      result.bytesTransferred = migrationResult.bytesTransferred;
-      result.success = migrationResult.failed === 0;
-
-    } catch (error: any) {
-      this.logger.error({ taskId, error: error.message }, 'OneDrive migration failed');
-      result.success = false;
-      result.errors.push(error.message);
+    if (!destObjectId) {
+      await this.updateTaskProgress(taskId, { status: 'FAILED' });
+      return;
     }
 
-    return result;
+    await this.updateTaskProgress(taskId, { status: 'IN_PROGRESS' });
+
+    const sourceGraph = await this.createGraphClient(sourceTenantId);
+    const destGraph = await this.createGraphClient(destTenantId);
+
+    try {
+      await this.migrateDrive(jobId, taskId, sourceGraph, destGraph, sourceObjectId, destObjectId);
+      await this.updateTaskProgress(taskId, { status: 'COMPLETED', progressPercent: 100 });
+    } catch (error) {
+      this.logger.error({ taskId, error }, 'OneDrive migration failed');
+      await this.updateTaskProgress(taskId, { status: 'FAILED' });
+      throw error;
+    }
+
+    await this.updateJobProgress(jobId);
   }
 
-  private async getUserDrive(client: any, userId: string): Promise<any> {
-    return this.retryWithBackoff(async () => {
-      return client.api(`/users/${userId}/drive`).get();
-    });
+  private async migrateDrive(
+    jobId: string, taskId: string,
+    source: GraphClient, dest: GraphClient,
+    sourceUserId: string, destUserId: string,
+  ): Promise<void> {
+    this.logger.info({ taskId }, 'Migrating OneDrive');
+
+    // Get total item count
+    const sourceDrive = await source.request<any>(`/users/${sourceUserId}/drive?$select=quota`);
+    const totalBytes = sourceDrive.quota?.used ?? 0;
+    await this.updateTaskProgress(taskId, { totalBytes: BigInt(totalBytes) });
+
+    // Recursively process from root
+    await this.processFolder(jobId, taskId, source, dest, sourceUserId, destUserId, 'root', '');
   }
 
-  private async getTotalItemCount(client: any, driveId: string): Promise<number> {
-    const response = await this.retryWithBackoff(async () => {
-      return client
-        .api(`/drives/${driveId}/root`)
-        .select('folder')
-        .get();
-    });
-    return response.folder?.childCount || 0;
-  }
+  private async processFolder(
+    jobId: string, taskId: string,
+    source: GraphClient, dest: GraphClient,
+    sourceUserId: string, destUserId: string,
+    folderId: string, destPath: string,
+  ): Promise<void> {
+    const path = folderId === 'root'
+      ? `/users/${sourceUserId}/drive/root/children`
+      : `/users/${sourceUserId}/drive/items/${folderId}/children`;
 
-  private async migrateFolder(
-    sourceClient: any,
-    destClient: any,
-    sourceDriveId: string,
-    destDriveId: string,
-    sourceFolderId: string,
-    destFolderId: string,
-    job: Job<MigrationJobData>,
-    totalItems: number,
-    processedSoFar = 0,
-  ): Promise<{ processed: number; failed: number; bytesTransferred: number }> {
-    let processed = 0;
-    let failed = 0;
-    let bytesTransferred = 0;
-    let nextLink: string | undefined;
+    let processedItems = 0;
+    let processedBytes = BigInt(0);
 
-    do {
-      const response = await this.retryWithBackoff(async () => {
-        if (nextLink) {
-          return sourceClient.api(nextLink).get();
-        }
-        return sourceClient
-          .api(`/drives/${sourceDriveId}/items/${sourceFolderId}/children`)
-          .select('id,name,size,folder,file,lastModifiedDateTime,webUrl')
-          .top(100)
-          .get();
-      });
-
-      for (const item of response.value as DriveItem[]) {
+    for await (const items of source.paginate<any>(`${path}?$select=id,name,size,file,folder,parentReference&$top=200`)) {
+      for (const item of items) {
         try {
           if (item.folder) {
             // Create folder in destination
-            const destFolder = await this.retryWithBackoff(async () => {
-              return destClient
-                .api(`/drives/${destDriveId}/items/${destFolderId}/children`)
-                .post({
-                  name: item.name,
-                  folder: {},
-                  '@microsoft.graph.conflictBehavior': 'rename',
-                });
-            });
-
-            // Recursively migrate folder contents
-            const folderResult = await this.migrateFolder(
-              sourceClient,
-              destClient,
-              sourceDriveId,
-              destDriveId,
-              item.id,
-              destFolder.id,
-              job,
-              totalItems,
-              processedSoFar + processed,
-            );
-
-            processed += folderResult.processed + 1;
-            failed += folderResult.failed;
-            bytesTransferred += folderResult.bytesTransferred;
-
-          } else if (item.file) {
-            // Migrate file
-            const fileResult = await this.migrateFile(
-              sourceClient,
-              destClient,
-              sourceDriveId,
-              destDriveId,
-              item,
-              destFolderId,
-            );
-
-            if (fileResult.success) {
-              processed++;
-              bytesTransferred += item.size;
-            } else {
-              failed++;
+            const destFolderPath = destPath ? `${destPath}/${item.name}` : item.name;
+            try {
+              await dest.request(`/users/${destUserId}/drive/root:/${destFolderPath}`, {
+                method: 'PATCH',
+                body: { folder: {}, name: item.name, '@microsoft.graph.conflictBehavior': 'replace' },
+              });
+            } catch {
+              // Folder may already exist
+              await dest.request(`/users/${destUserId}/drive/root/children`, {
+                method: 'POST',
+                body: { name: item.name, folder: {}, '@microsoft.graph.conflictBehavior': 'replace' },
+              });
             }
+
+            // Recurse into subfolder
+            await this.processFolder(jobId, taskId, source, dest, sourceUserId, destUserId, item.id, destFolderPath);
+          } else if (item.file) {
+            // Transfer file
+            await this.transferFile(taskId, source, dest, sourceUserId, destUserId, item, destPath);
+            processedBytes += BigInt(item.size ?? 0);
           }
 
-          // Update progress
-          const currentProgress = processedSoFar + processed;
-          const progress = totalItems > 0 ? Math.round((currentProgress / totalItems) * 100) : 0;
-          await job.updateProgress(progress);
-
-        } catch (error: any) {
-          this.logger.error({ itemId: item.id, name: item.name, error: error.message }, 'Failed to migrate item');
-          failed++;
+          processedItems++;
+        } catch (error) {
+          if (error instanceof GraphApiError) {
+            await this.logError(taskId, {
+              itemId: item.id,
+              itemName: item.name,
+              itemType: item.folder ? 'folder' : 'file',
+              errorCode: `HTTP_${error.statusCode}`,
+              errorMessage: error.message,
+              httpStatus: error.statusCode,
+              retryable: error.isTransient || error.isThrottled,
+            });
+          } else {
+            throw error;
+          }
         }
       }
 
-      nextLink = response['@odata.nextLink'];
-    } while (nextLink);
-
-    return { processed, failed, bytesTransferred };
-  }
-
-  private async migrateFile(
-    sourceClient: any,
-    destClient: any,
-    sourceDriveId: string,
-    destDriveId: string,
-    item: DriveItem,
-    destFolderId: string,
-  ): Promise<{ success: boolean }> {
-    try {
-      if (item.size < 4 * 1024 * 1024) {
-        // Small file - simple upload
-        const content = await this.retryWithBackoff(async () => {
-          return sourceClient
-            .api(`/drives/${sourceDriveId}/items/${item.id}/content`)
-            .get();
-        });
-
-        await this.retryWithBackoff(async () => {
-          await destClient
-            .api(`/drives/${destDriveId}/items/${destFolderId}:/${item.name}:/content`)
-            .put(content);
-        });
-
-      } else {
-        // Large file - resumable upload
-        await this.uploadLargeFile(
-          sourceClient,
-          destClient,
-          sourceDriveId,
-          destDriveId,
-          item,
-          destFolderId,
-        );
-      }
-
-      this.logger.debug({ fileName: item.name, size: this.formatBytes(item.size) }, 'File migrated');
-      return { success: true };
-
-    } catch (error: any) {
-      this.logger.error({ fileName: item.name, error: error.message }, 'Failed to migrate file');
-      return { success: false };
+      // Checkpoint after each page
+      await this.updateTaskProgress(taskId, {
+        processedItems,
+        processedBytes,
+        checkpointData: { lastFolderId: folderId, processedItems, processedBytes: processedBytes.toString() },
+      });
     }
   }
 
-  private async uploadLargeFile(
-    sourceClient: any,
-    destClient: any,
-    sourceDriveId: string,
-    destDriveId: string,
-    item: DriveItem,
-    destFolderId: string,
+  private async transferFile(
+    taskId: string,
+    source: GraphClient, dest: GraphClient,
+    sourceUserId: string, destUserId: string,
+    item: any, destPath: string,
   ): Promise<void> {
-    // Create upload session
-    const uploadSession = await this.retryWithBackoff(async () => {
-      return destClient
-        .api(`/drives/${destDriveId}/items/${destFolderId}:/${item.name}:/createUploadSession`)
-        .post({
-          item: {
-            '@microsoft.graph.conflictBehavior': 'rename',
-          },
-        });
-    });
+    const fileSize = item.size ?? 0;
+    const destFilePath = destPath ? `${destPath}/${item.name}` : item.name;
 
-    const uploadUrl = uploadSession.uploadUrl;
-    let offset = 0;
-    const fileSize = item.size;
+    // Get download URL
+    const sourceItem = await source.request<any>(
+      `/users/${sourceUserId}/drive/items/${item.id}?$select=id,@microsoft.graph.downloadUrl`,
+    );
+    const downloadUrl = sourceItem['@microsoft.graph.downloadUrl'];
+    if (!downloadUrl) {
+      this.logger.warn({ itemId: item.id, name: item.name }, 'No download URL available');
+      return;
+    }
 
-    // Download and upload in chunks
-    while (offset < fileSize) {
-      const rangeEnd = Math.min(offset + this.CHUNK_SIZE - 1, fileSize - 1);
+    if (fileSize <= SIMPLE_UPLOAD_MAX) {
+      // Simple upload for small files
+      const response = await fetch(downloadUrl);
+      const buffer = await response.arrayBuffer();
 
-      // Download chunk from source
-      const chunk = await this.retryWithBackoff(async () => {
-        return sourceClient
-          .api(`/drives/${sourceDriveId}/items/${item.id}/content`)
-          .header('Range', `bytes=${offset}-${rangeEnd}`)
-          .get();
-      });
-
-      // Upload chunk to destination
-      await this.retryWithBackoff(async () => {
-        const response = await fetch(uploadUrl, {
+      await dest.request(
+        `/users/${destUserId}/drive/root:/${encodeURIComponent(destFilePath)}:/content`,
+        {
           method: 'PUT',
-          headers: {
-            'Content-Length': (rangeEnd - offset + 1).toString(),
-            'Content-Range': `bytes ${offset}-${rangeEnd}/${fileSize}`,
-          },
-          body: chunk,
-        });
-
-        if (!response.ok && response.status !== 202) {
-          throw new Error(`Upload failed: ${response.status} ${response.statusText}`);
-        }
-      });
-
-      offset = rangeEnd + 1;
-
-      this.logger.debug(
-        { fileName: item.name, progress: Math.round((offset / fileSize) * 100) },
-        'Large file upload progress',
+          body: buffer,
+          headers: { 'Content-Type': 'application/octet-stream' },
+        },
       );
+    } else {
+      // Chunked upload for large files
+      const uploadSession = await dest.createUploadSession(
+        `/users/${destUserId}/drive/root:/${encodeURIComponent(destFilePath)}:`,
+        item.name,
+      );
+
+      // Stream download and upload in chunks
+      const response = await fetch(downloadUrl);
+      if (!response.body) throw new Error('No response body for download');
+
+      const reader = response.body.getReader();
+      let offset = 0;
+      let buffer = new Uint8Array(0);
+
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (value) {
+          // Append to buffer
+          const newBuffer = new Uint8Array(buffer.length + value.length);
+          newBuffer.set(buffer);
+          newBuffer.set(value, buffer.length);
+          buffer = newBuffer;
+        }
+
+        // Upload when we have enough data or this is the last chunk
+        while (buffer.length >= CHUNK_SIZE || (done && buffer.length > 0)) {
+          const chunkSize = Math.min(buffer.length, CHUNK_SIZE);
+          const chunk = buffer.slice(0, chunkSize);
+          const rangeEnd = offset + chunkSize - 1;
+
+          await dest.uploadChunk(
+            uploadSession.uploadUrl,
+            chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength),
+            offset,
+            rangeEnd,
+            fileSize,
+          );
+
+          offset += chunkSize;
+          buffer = buffer.slice(chunkSize);
+
+          if (done && buffer.length === 0) break;
+        }
+
+        if (done) break;
+      }
     }
   }
 }
