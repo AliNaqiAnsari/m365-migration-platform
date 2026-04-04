@@ -46,6 +46,10 @@ export default () => {
       redirectUri: process.env.AZURE_REDIRECT_URI,
     },
 
+    clerk: {
+      issuer: process.env.CLERK_ISSUER_URL,
+    },
+
     encryption: {
       key: process.env.ENCRYPTION_KEY ?? (isProduction ? '' : 'dev-only-32-char-key-not-prod!!'),
     },

@@ -1,4 +1,7 @@
-version: "3.8"
+# ============================================================
+# M365 Migration Platform — Local Development
+# Usage: docker compose -f infrastructure/docker/docker-compose.yml up -d
+# ============================================================
 
 services:
   postgres:
@@ -6,15 +9,15 @@ services:
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: m365_migration
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-m365_migration}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-m365_migration}"]
       interval: 5s
-      timeout: 5s
+      timeout: 3s
       retries: 5
 
   redis:
@@ -26,19 +29,18 @@ services:
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
-      timeout: 5s
+      timeout: 3s
       retries: 5
 
-  # Azure Blob Storage emulator for local development
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite
     ports:
-      - "10000:10000"  # Blob service
-      - "10001:10001"  # Queue service
-      - "10002:10002"  # Table service
+      - "10000:10000"
+      - "10001:10001"
+      - "10002:10002"
     volumes:
       - azurite_data:/data
-    command: azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0
+    command: azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --location /data
 
 volumes:
   postgres_data:

@@ -61,6 +61,9 @@ COPY --from=deps /app/packages/database/node_modules ./packages/database/node_mo
 COPY packages/database/package.json packages/database/
 RUN cd packages/database && npx prisma generate
 
+COPY apps/api/entrypoint.sh ./entrypoint.sh
+RUN chmod +x entrypoint.sh
+
 USER appuser
 
 ENV NODE_ENV=production
@@ -69,7 +72,7 @@ EXPOSE 3001
 
 # dumb-init forwards SIGTERM properly for graceful shutdown
 ENTRYPOINT ["dumb-init", "--"]
-CMD ["node", "apps/api/dist/main.js"]
+CMD ["./entrypoint.sh"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:3001/api/v1/health/live || exit 1

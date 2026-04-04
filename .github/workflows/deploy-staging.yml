@@ -1,0 +1,174 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  ACR_NAME: acrm365migr3li
+  RESOURCE_GROUP: rg-m365-migration-stg
+
+jobs:
+  # ---------- Build all 3 images in parallel ----------
+
+  build-api:
+    runs-on: ubuntu-latest
+    environment: staging
+    outputs:
+      image_tag: ${{ steps.build.outputs.image_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Login to ACR
+        run: az acr login --name ${{ env.ACR_NAME }}
+
+      - name: Build and push API image
+        id: build
+        run: |
+          IMAGE_TAG=stg-${{ github.sha }}
+          docker build \
+            -f apps/api/Dockerfile \
+            -t ${{ env.ACR_NAME }}.azurecr.io/m365-api:${IMAGE_TAG} \
+            -t ${{ env.ACR_NAME }}.azurecr.io/m365-api:stg-latest .
+          docker push ${{ env.ACR_NAME }}.azurecr.io/m365-api:${IMAGE_TAG}
+          docker push ${{ env.ACR_NAME }}.azurecr.io/m365-api:stg-latest
+          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+
+  build-worker:
+    runs-on: ubuntu-latest
+    environment: staging
+    outputs:
+      image_tag: ${{ steps.build.outputs.image_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Login to ACR
+        run: az acr login --name ${{ env.ACR_NAME }}
+
+      - name: Build and push Worker image
+        id: build
+        run: |
+          IMAGE_TAG=stg-${{ github.sha }}
+          docker build \
+            -f apps/worker/Dockerfile \
+            -t ${{ env.ACR_NAME }}.azurecr.io/m365-worker:${IMAGE_TAG} \
+            -t ${{ env.ACR_NAME }}.azurecr.io/m365-worker:stg-latest .
+          docker push ${{ env.ACR_NAME }}.azurecr.io/m365-worker:${IMAGE_TAG}
+          docker push ${{ env.ACR_NAME }}.azurecr.io/m365-worker:stg-latest
+          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+
+  build-web:
+    runs-on: ubuntu-latest
+    environment: staging
+    outputs:
+      image_tag: ${{ steps.build.outputs.image_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Login to ACR
+        run: az acr login --name ${{ env.ACR_NAME }}
+
+      - name: Build and push Web image
+        id: build
+        run: |
+          IMAGE_TAG=stg-${{ github.sha }}
+          docker build \
+            -f apps/web/Dockerfile \
+            --build-arg NEXT_PUBLIC_API_URL=https://m365-api-stg.3li.global/api/v1 \
+            -t ${{ env.ACR_NAME }}.azurecr.io/m365-web:${IMAGE_TAG} \
+            -t ${{ env.ACR_NAME }}.azurecr.io/m365-web:stg-latest .
+          docker push ${{ env.ACR_NAME }}.azurecr.io/m365-web:${IMAGE_TAG}
+          docker push ${{ env.ACR_NAME }}.azurecr.io/m365-web:stg-latest
+          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+
+  # ---------- Deploy all 3 containers ----------
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [build-api, build-worker, build-web]
+    environment:
+      name: staging
+      url: https://m365-stg.3li.global
+    steps:
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy API
+        run: |
+          az containerapp update \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ca-m365-migration-api-stg \
+            --image ${{ env.ACR_NAME }}.azurecr.io/m365-api:${{ needs.build-api.outputs.image_tag }}
+
+      - name: Deploy Worker
+        run: |
+          az containerapp update \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ca-m365-migration-worker-stg \
+            --image ${{ env.ACR_NAME }}.azurecr.io/m365-worker:${{ needs.build-worker.outputs.image_tag }}
+
+      - name: Deploy Web
+        run: |
+          az containerapp update \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ca-m365-migration-web-stg \
+            --image ${{ env.ACR_NAME }}.azurecr.io/m365-web:${{ needs.build-web.outputs.image_tag }}
+
+      - name: Health check
+        run: |
+          echo "Waiting for new revisions to start..."
+          sleep 30
+          for i in 1 2 3 4 5; do
+            STATUS=$(curl -sf --max-time 10 "https://m365-api-stg.3li.global/api/v1/health" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('data',{}).get('status',''))" 2>/dev/null || echo "unreachable")
+            echo "Attempt $i: API=$STATUS"
+            if [ "$STATUS" = "ok" ] || [ "$STATUS" = "degraded" ]; then
+              echo "API health check passed"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::API health check failed after 5 attempts"
+          exit 1
+
+      - name: Deployment summary
+        if: success()
+        run: |
+          echo "### Staging Deployment :rocket:" >> $GITHUB_STEP_SUMMARY
+          echo "| Service | Image Tag |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|-----------|" >> $GITHUB_STEP_SUMMARY
+          echo "| API | \`${{ needs.build-api.outputs.image_tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Worker | \`${{ needs.build-worker.outputs.image_tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Web | \`${{ needs.build-web.outputs.image_tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **API:** https://m365-api-stg.3li.global" >> $GITHUB_STEP_SUMMARY
+          echo "- **Web:** https://m365-stg.3li.global" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY

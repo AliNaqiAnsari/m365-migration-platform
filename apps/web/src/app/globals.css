@@ -1,0 +1,156 @@
+@import "tailwindcss";
+
+/* ============================================================
+   3LI GLOBAL — M365 Migration Platform Theme
+   ============================================================ */
+
+:root {
+  /* Brand */
+  --brand: #4C2BBF;
+  --brand-light: #836ADF;
+  --brand-50: #f4f0ff;
+  --brand-100: #ebe4ff;
+  --brand-200: #d9ccff;
+  --brand-300: #bea6ff;
+  --brand-400: #9f75ff;
+  --brand-500: #836ADF;
+  --brand-600: #6342e5;
+  --brand-700: #4C2BBF;
+  --brand-800: #4324a1;
+  --brand-900: #371d84;
+  --brand-950: #221461;
+
+  /* Semantic */
+  --background: #fafafa;
+  --foreground: #18181b;
+  --card: #ffffff;
+  --card-foreground: #18181b;
+  --popover: #ffffff;
+  --popover-foreground: #18181b;
+  --primary: #4C2BBF;
+  --primary-foreground: #ffffff;
+  --secondary: #f4f4f5;
+  --secondary-foreground: #18181b;
+  --muted: #f4f4f5;
+  --muted-foreground: #71717a;
+  --accent: #f4f0ff;
+  --accent-foreground: #4C2BBF;
+  --destructive: #df5754;
+  --destructive-foreground: #ffffff;
+  --success: #53ac52;
+  --success-foreground: #ffffff;
+  --info: #1f96bb;
+  --info-foreground: #ffffff;
+  --warning: #f08c10;
+  --warning-foreground: #ffffff;
+  --border: #e4e4e7;
+  --input: #e4e4e7;
+  --ring: #4C2BBF;
+  --radius: 0.625rem;
+
+  /* Sidebar */
+  --sidebar: #fafafa;
+  --sidebar-foreground: #18181b;
+  --sidebar-border: #e4e4e7;
+  --sidebar-accent: #f4f0ff;
+  --sidebar-accent-foreground: #4C2BBF;
+}
+
+.dark {
+  --background: #09090b;
+  --foreground: #fafafa;
+  --card: #18181b;
+  --card-foreground: #fafafa;
+  --popover: #18181b;
+  --popover-foreground: #fafafa;
+  --primary: #836ADF;
+  --primary-foreground: #ffffff;
+  --secondary: #27272a;
+  --secondary-foreground: #fafafa;
+  --muted: #27272a;
+  --muted-foreground: #a1a1aa;
+  --accent: #1a1233;
+  --accent-foreground: #bea6ff;
+  --destructive: #df5754;
+  --destructive-foreground: #ffffff;
+  --success: #53ac52;
+  --info: #1f96bb;
+  --warning: #f08c10;
+  --border: #27272a;
+  --input: #27272a;
+  --ring: #836ADF;
+
+  --sidebar: #0f0f12;
+  --sidebar-foreground: #fafafa;
+  --sidebar-border: #27272a;
+  --sidebar-accent: #1a1233;
+  --sidebar-accent-foreground: #bea6ff;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --color-brand: var(--brand);
+  --color-brand-light: var(--brand-light);
+  --color-brand-50: var(--brand-50);
+  --color-brand-100: var(--brand-100);
+  --color-brand-200: var(--brand-200);
+  --color-brand-300: var(--brand-300);
+  --color-brand-400: var(--brand-400);
+  --color-brand-500: var(--brand-500);
+  --color-brand-600: var(--brand-600);
+  --color-brand-700: var(--brand-700);
+  --color-brand-800: var(--brand-800);
+  --color-brand-900: var(--brand-900);
+  --color-brand-950: var(--brand-950);
+}
+
+/* Gradient utility */
+.bg-brand-gradient {
+  background: linear-gradient(135deg, #4C2BBF 0%, #836ADF 100%);
+}
+
+/* Smooth scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}

@@ -1,0 +1,34 @@
+# ============================================================
+# Example Terraform Variables
+# Copy to terraform.tfvars and fill in secrets
+# ============================================================
+
+environment = "stg"    # "stg" or "prd"
+location    = "northeurope"
+
+# Database
+db_admin_password = "CHANGE-ME-strong-password-here"
+
+# Secrets
+jwt_secret    = "CHANGE-ME-random-string-at-least-32-chars"
+encryption_key = "CHANGE-ME-exactly-32-characters!"
+
+# Stripe (optional for staging)
+stripe_secret_key     = ""
+stripe_webhook_secret = ""
+
+# Staging overrides
+api_min_replicas    = 0
+api_max_replicas    = 3
+worker_min_replicas = 0
+worker_max_replicas = 3
+web_min_replicas    = 0
+web_max_replicas    = 3
+
+# Production overrides (uncomment for prd)
+# api_min_replicas    = 1
+# api_max_replicas    = 10
+# worker_min_replicas = 1
+# worker_max_replicas = 10
+# web_min_replicas    = 1
+# web_max_replicas    = 5

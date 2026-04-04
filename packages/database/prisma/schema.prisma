@@ -78,6 +78,7 @@ enum AuthProvider {
   LOCAL
   MICROSOFT
   GOOGLE
+  CLERK
 }
 
 model Session {
