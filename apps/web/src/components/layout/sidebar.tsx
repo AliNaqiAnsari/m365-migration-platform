@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import Image from "next/image";
+/* eslint-disable @next/next/no-img-element */
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
@@ -80,7 +80,7 @@ export function Sidebar() {
       {/* Logo */}
       <div className="flex h-14 items-center border-b border-sidebar-border px-4">
         <Link href="/" className="flex items-center gap-2.5 overflow-hidden">
-          <Image
+          <img
             src="/logo.svg"
             alt="3LI GLOBAL"
             width={32}
