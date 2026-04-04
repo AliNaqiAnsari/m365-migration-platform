@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 48" fill="none">
+  <defs>
+    <linearGradient id="brand-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#4C2BBF"/>
+      <stop offset="100%" stop-color="#836ADF"/>
+    </linearGradient>
+  </defs>
+  <!-- 3LI text -->
+  <text x="0" y="36" font-family="Inter, system-ui, -apple-system, sans-serif" font-size="38" font-weight="800" fill="url(#brand-gradient)" letter-spacing="-1">3LI</text>
+  <!-- GLOBAL text -->
+  <text x="82" y="36" font-family="Inter, system-ui, -apple-system, sans-serif" font-size="38" font-weight="300" fill="currentColor" letter-spacing="-0.5">GLOBAL</text>
+</svg>

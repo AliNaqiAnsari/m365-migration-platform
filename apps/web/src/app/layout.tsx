@@ -14,10 +14,14 @@ const inter = Inter({
 
 export const metadata: Metadata = {
   title: {
-    default: "M365 Migration Platform — 3LI GLOBAL",
-    template: "%s — M365 Migration Platform",
+    default: "MigrationHub — 3LI GLOBAL",
+    template: "%s — MigrationHub",
   },
   description: "Enterprise-grade Microsoft 365 tenant-to-tenant migration platform by 3LI GLOBAL",
+  icons: {
+    icon: "/logo-icon.svg",
+    apple: "/logo-icon.svg",
+  },
 };
 
 export default function RootLayout({
