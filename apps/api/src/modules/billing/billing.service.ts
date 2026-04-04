@@ -6,13 +6,21 @@ import { PLAN_LIMITS, type PlanTier } from '@m365-migration/types';
 
 @Injectable()
 export class BillingService {
-  private stripe: Stripe;
+  private stripe: Stripe | null;
 
   constructor(
     @Inject('PRISMA') private prisma: PrismaClient,
     private config: ConfigService,
   ) {
-    this.stripe = new Stripe(this.config.get<string>('stripe.secretKey')!);
+    const secretKey = this.config.get<string>('stripe.secretKey');
+    this.stripe = secretKey ? new Stripe(secretKey) : null;
+  }
+
+  private requireStripe(): Stripe {
+    if (!this.stripe) {
+      throw new BadRequestException('Billing is not configured. Set STRIPE_SECRET_KEY to enable.');
+    }
+    return this.stripe;
   }
 
   async createCheckoutSession(
@@ -25,7 +33,7 @@ export class BillingService {
     // Get or create Stripe customer
     let customerId = org.stripeCustomerId;
     if (!customerId) {
-      const customer = await this.stripe.customers.create({
+      const customer = await this.requireStripe().customers.create({
         name: org.name,
         email: org.billingEmail ?? undefined,
         metadata: { organizationId },
@@ -55,7 +63,7 @@ export class BillingService {
       }
     }
 
-    const session = await this.stripe.checkout.sessions.create({
+    const session = await this.requireStripe().checkout.sessions.create({
       customer: customerId,
       mode: 'subscription',
       line_items: lineItems,
@@ -81,7 +89,7 @@ export class BillingService {
     const org = await this.prisma.organization.findUnique({ where: { id: organizationId } });
     if (!org?.stripeCustomerId) throw new BadRequestException('No billing account found');
 
-    const session = await this.stripe.billingPortal.sessions.create({
+    const session = await this.requireStripe().billingPortal.sessions.create({
       customer: org.stripeCustomerId,
       return_url: returnUrl,
     });
@@ -147,7 +155,7 @@ export class BillingService {
     const org = await this.prisma.organization.findUnique({ where: { id: organizationId } });
     if (!org?.stripeCustomerId) return { invoices: [] };
 
-    const invoices = await this.stripe.invoices.list({
+    const invoices = await this.requireStripe().invoices.list({
       customer: org.stripeCustomerId,
       limit: 20,
     });
@@ -173,7 +181,7 @@ export class BillingService {
 
     let event: Stripe.Event;
     try {
-      event = this.stripe.webhooks.constructEvent(rawBody, signature, webhookSecret);
+      event = this.requireStripe().webhooks.constructEvent(rawBody, signature, webhookSecret);
     } catch {
       throw new BadRequestException('Invalid webhook signature');
     }
@@ -207,7 +215,7 @@ export class BillingService {
     if (!organizationId || !plan) return;
 
     // Retrieve the subscription (use any to handle Stripe API version differences)
-    const stripeSubscription = await this.stripe.subscriptions.retrieve(session.subscription as string) as any;
+    const stripeSubscription = await this.requireStripe().subscriptions.retrieve(session.subscription as string) as any;
     const periodStart = stripeSubscription.current_period_start
       ? new Date(stripeSubscription.current_period_start * 1000)
       : new Date();

@@ -19,8 +19,9 @@ export class MappingsService {
   }
 
   async updateMapping(jobId: string, mappingId: string, organizationId: string, data: {
-    destinationId: string;
+    destinationId?: string;
     destIdentifier?: string;
+    status?: string;
   }) {
     await this.validateJobAccess(jobId, organizationId);
 
@@ -28,6 +29,14 @@ export class MappingsService {
       where: { id: mappingId, jobId },
     });
     if (!mapping) throw new NotFoundException('Mapping not found');
+
+    // Allow skipping unmapped objects
+    if (data.status === 'SKIPPED') {
+      return this.prisma.identityMapping.update({
+        where: { id: mappingId },
+        data: { status: 'SKIPPED' },
+      });
+    }
 
     return this.prisma.identityMapping.update({
       where: { id: mappingId },
@@ -63,20 +72,25 @@ export class MappingsService {
       where: { jobId, status: 'PENDING' },
     });
 
+    const skipped = await this.prisma.identityMapping.count({
+      where: { jobId, status: 'SKIPPED' },
+    });
+
     const total = await this.prisma.identityMapping.count({
       where: { jobId },
     });
 
-    const mapped = total - unmapped;
+    const mapped = total - unmapped - skipped;
 
     return {
       total,
       mapped,
       unmapped,
+      skipped,
       isValid: unmapped === 0,
       message: unmapped > 0
-        ? `${unmapped} objects are not yet mapped. Map them manually or run auto-mapping.`
-        : 'All objects are mapped. Ready to proceed.',
+        ? `${unmapped} objects are not yet mapped. Map them manually, skip them, or run auto-mapping.`
+        : 'All objects are mapped or skipped. Ready to proceed.',
     };
   }
 

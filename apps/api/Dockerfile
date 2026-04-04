@@ -27,13 +27,16 @@ COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .npmrc turbo.json tsconfig.
 COPY packages/ packages/
 COPY apps/api/ apps/api/
 
-# Generate Prisma client and build
+# Generate Prisma client, build workspace packages, then build API
 RUN cd packages/database && npx prisma generate
+RUN cd packages/database && npx tsc
+RUN cd packages/types && npx tsc
+RUN cd packages/graph-client && npx tsc
 RUN cd apps/api && npx tsc -p tsconfig.json
 
 # Stage 3: Production image
 FROM node:20-alpine AS production
-RUN apk add --no-cache dumb-init
+RUN apk add --no-cache dumb-init openssl
 WORKDIR /app
 
 # Non-root user
@@ -45,7 +48,15 @@ COPY --from=deps /app/apps/api/node_modules ./apps/api/node_modules
 COPY --from=builder /app/apps/api/dist ./apps/api/dist
 COPY --from=builder /app/packages/database/prisma ./packages/database/prisma
 
-# Re-generate Prisma client for alpine target
+# Copy workspace packages (pnpm symlinks in apps/api/node_modules resolve to these)
+COPY --from=builder /app/packages/types/package.json ./packages/types/package.json
+COPY --from=builder /app/packages/types/dist ./packages/types/dist
+COPY --from=builder /app/packages/graph-client/package.json ./packages/graph-client/package.json
+COPY --from=builder /app/packages/graph-client/dist ./packages/graph-client/dist
+COPY --from=builder /app/packages/graph-client/node_modules ./packages/graph-client/node_modules
+
+# Copy database package and re-generate Prisma client for alpine target
+COPY --from=builder /app/packages/database/dist ./packages/database/dist
 COPY --from=deps /app/packages/database/node_modules ./packages/database/node_modules
 COPY packages/database/package.json packages/database/
 RUN cd packages/database && npx prisma generate

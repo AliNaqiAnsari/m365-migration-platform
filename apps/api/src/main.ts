@@ -1,3 +1,8 @@
+// Enable BigInt JSON serialization (Prisma returns BigInt for large numeric fields)
+(BigInt.prototype as any).toJSON = function () {
+  return this.toString();
+};
+
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';

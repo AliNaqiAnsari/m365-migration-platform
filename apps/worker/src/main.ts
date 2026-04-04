@@ -1,3 +1,8 @@
+// Enable BigInt JSON serialization (Prisma returns BigInt for large numeric fields)
+(BigInt.prototype as any).toJSON = function () {
+  return this.toString();
+};
+
 import Redis from 'ioredis';
 import pino from 'pino';
 import { PrismaClient } from '@m365-migration/database';

@@ -102,17 +102,25 @@ export class MigrationsService {
       throw new BadRequestException(`Cannot start job in ${job.status} status`);
     }
 
+    // If resuming from READY after mapping, advance to PRE_MIGRATION
+    const phase = job.status === 'READY' && job.currentPhase === 'MAPPING'
+      ? 'PRE_MIGRATION'
+      : 'DISCOVERY';
+
+    const updateData: any = { status: phase === 'DISCOVERY' ? 'DISCOVERING' : 'IN_PROGRESS', currentPhase: phase };
+    if (!job.startedAt) updateData.startedAt = new Date();
+
     await this.prisma.migrationJob.update({
       where: { id },
-      data: { status: 'DISCOVERING', currentPhase: 'DISCOVERY', startedAt: new Date() },
+      data: updateData,
     });
 
-    await this.orchestratorQueue.add('start-migration', {
+    await this.orchestratorQueue.add('advance-phase', {
       jobId: id,
       organizationId,
       sourceTenantId: job.sourceTenantId,
       destTenantId: job.destTenantId,
-      phase: 'DISCOVERY',
+      phase,
       workloads: job.workloads,
     });
 

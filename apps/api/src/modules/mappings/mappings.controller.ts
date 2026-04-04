@@ -7,12 +7,17 @@ import { CurrentUser, type CurrentUserData } from '../../common/decorators/curre
 import { IsString, IsOptional } from 'class-validator';
 
 class UpdateMappingDto {
+  @IsOptional()
   @IsString()
-  destinationId: string;
+  destinationId?: string;
 
   @IsOptional()
   @IsString()
   destIdentifier?: string;
+
+  @IsOptional()
+  @IsString()
+  status?: string;
 }
 
 @Controller('migrations/:jobId/mappings')
