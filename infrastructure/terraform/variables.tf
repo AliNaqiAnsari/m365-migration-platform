@@ -135,6 +135,27 @@ variable "stripe_webhook_secret" {
   default     = ""
 }
 
+# ---------- Clerk Auth ----------
+
+variable "clerk_publishable_key" {
+  description = "Clerk publishable key (NEXT_PUBLIC)"
+  type        = string
+  default     = ""
+}
+
+variable "clerk_secret_key" {
+  description = "Clerk secret key"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "clerk_issuer_url" {
+  description = "Clerk JWKS issuer URL (e.g. https://sound-muskox-31.clerk.accounts.dev)"
+  type        = string
+  default     = ""
+}
+
 # ---------- DNS ----------
 
 variable "domain" {

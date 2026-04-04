@@ -149,6 +149,10 @@ resource "azurerm_container_app" "api" {
         name  = "FRONTEND_URL"
         value = "https://${local.web_hostname}"
       }
+      env {
+        name  = "CLERK_ISSUER_URL"
+        value = var.clerk_issuer_url
+      }
 
       liveness_probe {
         transport = "HTTP"
@@ -314,6 +318,11 @@ resource "azurerm_container_app" "web" {
     value = azurerm_container_registry.main.admin_password
   }
 
+  secret {
+    name  = "clerk-secret-key"
+    value = var.clerk_secret_key
+  }
+
   ingress {
     external_enabled = true
     target_port      = 3000
@@ -346,6 +355,14 @@ resource "azurerm_container_app" "web" {
       env {
         name  = "NEXT_PUBLIC_API_URL"
         value = "https://${local.api_hostname}/api/v1"
+      }
+      env {
+        name  = "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY"
+        value = var.clerk_publishable_key
+      }
+      env {
+        name        = "CLERK_SECRET_KEY"
+        secret_name = "clerk-secret-key"
       }
 
       liveness_probe {
