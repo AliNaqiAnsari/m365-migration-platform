@@ -6,14 +6,13 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
       <div className="w-full max-w-md">
         <div className="mb-8 flex flex-col items-center">
           <Image
-            src="/logo-icon.svg"
+            src="/logo-full.svg"
             alt="3LI GLOBAL"
-            width={56}
-            height={56}
-            className="shadow-lg shadow-brand/25 rounded-xl"
+            width={88}
+            height={88}
+            priority
           />
-          <h2 className="mt-4 text-xl font-semibold">MigrationHub</h2>
-          <p className="text-sm text-muted-foreground">by 3LI GLOBAL</p>
+          <h2 className="mt-3 text-xl font-semibold">MigrationHub</h2>
         </div>
         {children}
       </div>

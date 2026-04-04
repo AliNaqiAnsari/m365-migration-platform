@@ -19,8 +19,8 @@ export const metadata: Metadata = {
   },
   description: "Enterprise-grade Microsoft 365 tenant-to-tenant migration platform by 3LI GLOBAL",
   icons: {
-    icon: "/logo-icon.svg",
-    apple: "/logo-icon.svg",
+    icon: "/logo.svg",
+    apple: "/logo.svg",
   },
 };
 

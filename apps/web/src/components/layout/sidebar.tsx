@@ -80,31 +80,21 @@ export function Sidebar() {
       {/* Logo */}
       <div className="flex h-14 items-center border-b border-sidebar-border px-4">
         <Link href="/" className="flex items-center gap-2.5 overflow-hidden">
-          {collapsed ? (
-            <Image
-              src="/logo-icon.svg"
-              alt="3LI GLOBAL"
-              width={32}
-              height={32}
-              className="shrink-0"
-            />
-          ) : (
-            <div className="flex items-center gap-2.5">
-              <Image
-                src="/logo-icon.svg"
-                alt="3LI GLOBAL"
-                width={32}
-                height={32}
-                className="shrink-0"
-              />
-              <div className="flex flex-col leading-tight">
-                <span className="text-sm font-bold text-sidebar-foreground whitespace-nowrap">
-                  MigrationHub
-                </span>
-                <span className="text-[10px] text-muted-foreground whitespace-nowrap">
-                  by 3LI GLOBAL
-                </span>
-              </div>
+          <Image
+            src="/logo.svg"
+            alt="3LI GLOBAL"
+            width={32}
+            height={22}
+            className="shrink-0"
+          />
+          {!collapsed && (
+            <div className="flex flex-col leading-tight">
+              <span className="text-sm font-bold text-sidebar-foreground whitespace-nowrap">
+                MigrationHub
+              </span>
+              <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                by 3LI GLOBAL
+              </span>
             </div>
           )}
         </Link>
