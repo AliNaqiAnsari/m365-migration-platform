@@ -11,7 +11,7 @@ export function TopNav() {
   const { setMobileOpen } = useSidebarStore();
 
   return (
-    <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b border-border bg-background/80 backdrop-blur-sm px-4 lg:px-6">
+    <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-border/50 bg-background px-4 lg:px-6">
       <div className="flex items-center gap-3">
         <Button
           variant="ghost"
@@ -23,10 +23,11 @@ export function TopNav() {
         </Button>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-3">
         <Button
           variant="ghost"
           size="icon"
+          className="h-8 w-8 text-muted-foreground hover:text-foreground"
           onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
         >
           <Sun className="h-4 w-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
@@ -34,10 +35,12 @@ export function TopNav() {
           <span className="sr-only">Toggle theme</span>
         </Button>
 
+        <div className="h-6 w-px bg-border/50" />
+
         <UserButton
           appearance={{
             elements: {
-              avatarBox: "h-9 w-9",
+              avatarBox: "h-8 w-8",
             },
           }}
         />

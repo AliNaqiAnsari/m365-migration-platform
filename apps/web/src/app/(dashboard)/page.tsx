@@ -3,7 +3,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { getDashboardStats, getRecentActivity } from "@/lib/api/dashboard";
 import { QUERY_KEYS } from "@/lib/utils/constants";
-import { PageHeader } from "@/components/layout/page-header";
 import { StatsCards } from "@/components/dashboard/stats-cards";
 import { RecentActivity } from "@/components/dashboard/recent-activity";
 import { ActiveMigrations } from "@/components/dashboard/active-migrations";
@@ -21,31 +20,43 @@ export default function DashboardPage() {
   });
 
   return (
-    <div className="space-y-6">
-      <PageHeader title="Dashboard" description="Overview of your migration operations" />
+    <div className="space-y-8">
+      {/* Header */}
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight text-foreground">Dashboard</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Monitor your Microsoft 365 migration operations at a glance.
+        </p>
+      </div>
 
+      {/* Stats */}
       {statsLoading ? (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
           {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-24 rounded-xl" />
+            <Skeleton key={i} className="h-28 rounded-xl" />
           ))}
         </div>
       ) : stats ? (
         <StatsCards stats={stats} />
       ) : null}
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        {statsLoading ? (
-          <Skeleton className="h-80 rounded-xl" />
-        ) : stats ? (
-          <ActiveMigrations jobs={stats.recentJobs} />
-        ) : null}
+      {/* Main content grid */}
+      <div className="grid gap-6 lg:grid-cols-7">
+        <div className="lg:col-span-4">
+          {statsLoading ? (
+            <Skeleton className="h-96 rounded-xl" />
+          ) : stats ? (
+            <ActiveMigrations jobs={stats.recentJobs} />
+          ) : null}
+        </div>
 
-        {activityLoading ? (
-          <Skeleton className="h-80 rounded-xl" />
-        ) : (
-          <RecentActivity activities={activities ?? []} />
-        )}
+        <div className="lg:col-span-3">
+          {activityLoading ? (
+            <Skeleton className="h-96 rounded-xl" />
+          ) : (
+            <RecentActivity activities={activities ?? []} />
+          )}
+        </div>
       </div>
     </div>
   );

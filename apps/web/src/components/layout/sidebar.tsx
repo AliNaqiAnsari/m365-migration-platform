@@ -78,8 +78,8 @@ export function Sidebar() {
       )}
     >
       {/* Logo */}
-      <div className="flex h-14 items-center border-b border-sidebar-border px-4">
-        <Link href="/" className="flex items-center gap-2.5 overflow-hidden">
+      <div className="flex h-16 items-center border-b border-sidebar-border px-4">
+        <Link href="/" className="flex items-center gap-3 overflow-hidden">
           <img
             src="/logo.svg"
             alt="3LI GLOBAL"
@@ -89,7 +89,7 @@ export function Sidebar() {
           />
           {!collapsed && (
             <div className="flex flex-col leading-tight">
-              <span className="text-sm font-bold text-sidebar-foreground whitespace-nowrap">
+              <span className="text-sm font-semibold text-sidebar-foreground whitespace-nowrap tracking-tight">
                 MigrationHub
               </span>
               <span className="text-[10px] text-muted-foreground whitespace-nowrap">
@@ -101,16 +101,16 @@ export function Sidebar() {
       </div>
 
       {/* Navigation */}
-      <ScrollArea className="flex-1 py-3">
-        <nav className="space-y-5 px-2">
+      <ScrollArea className="flex-1 py-4">
+        <nav className="space-y-6 px-3">
           {navigation.map((group) => (
             <div key={group.label}>
               {!collapsed && (
-                <p className="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
                   {group.label}
                 </p>
               )}
-              <div className="space-y-0.5">
+              <div className="space-y-1">
                 {group.items.map((item) => {
                   const isActive =
                     item.href === "/"
@@ -122,13 +122,16 @@ export function Sidebar() {
                       key={item.href}
                       href={item.href}
                       className={cn(
-                        "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                        "relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-150",
                         isActive
                           ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                          : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+                          : "text-sidebar-foreground/60 hover:bg-sidebar-accent/40 hover:text-sidebar-foreground"
                       )}
                     >
-                      <item.icon className={cn("h-4 w-4 shrink-0", isActive && "text-brand")} />
+                      {isActive && (
+                        <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-[3px] rounded-r-full bg-brand" />
+                      )}
+                      <item.icon className={cn("h-[18px] w-[18px] shrink-0", isActive ? "text-brand" : "")} />
                       {!collapsed && <span>{item.label}</span>}
                     </Link>
                   );

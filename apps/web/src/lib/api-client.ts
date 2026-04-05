@@ -42,11 +42,8 @@ apiClient.interceptors.response.use(
     return response;
   },
   async (error: AxiosError) => {
-    // On 401, Clerk middleware will handle redirect to sign-in
-    if (error.response?.status === 401 && typeof window !== "undefined") {
-      window.location.href = "/sign-in";
-      return Promise.reject(error);
-    }
+    // On 401, just reject — let Clerk's server-side proxy.ts handle auth redirects.
+    // Do NOT redirect here; it causes loops when the Clerk token isn't ready yet.
 
     // Extract error message from API envelope
     if (error.response?.data) {
